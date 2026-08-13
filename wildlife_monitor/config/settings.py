@@ -62,6 +62,11 @@ SAM3_CHECKPOINT = MODELS_DIR / "sam3.pt"
 # YOLOv11 nano — Ultralytics downloads this automatically on first use.
 YOLO_MODEL = "yolo11n.pt"
 
+# MegaDetector — Microsoft AI for Earth camera trap animal detector.
+# Downloads automatically (~700 MB) on first use via the megadetector package.
+# Used by Pipeline 1c (BioCLIP + MegaDetector) for multi-instance counting.
+MEGADETECTOR_CONF = 0.20   # minimum confidence for each animal detection
+
 
 # ── Detection hyper-parameters ────────────────────────────────────────────────
 # BioCLIP prompt template. {species} is filled in at runtime.
