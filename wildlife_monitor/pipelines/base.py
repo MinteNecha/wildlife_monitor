@@ -90,23 +90,6 @@ class DetectionPipeline(ABC):
         return out_csv
 
     # ── Internal helpers ──────────────────────────────────────────────────────
-    @staticmethod
-    def _build_ground_truth_lookup() -> dict[str, str]:
-        """Build image_id → ground_truth_species_label mapping from the subset CSV."""
-        import pandas as pd
-        if not SUBSET_CSV.exists():
-            alt = SUBSET_CSV.parent.parent / "data" / "subset_metadata.csv"
-            if not alt.exists():
-                return {}
-            csv_path = alt
-        else:
-            csv_path = SUBSET_CSV
-        frame = pd.read_csv(csv_path)
-        if not {"image_id", "species_label"} <= set(frame.columns):
-            return {}
-        return dict(zip(frame["image_id"].astype(str),
-                        frame["species_label"].astype(str)))
-
     def _process(self, frame: pd.DataFrame, species: str) -> list[DetectionRecord]:
         ground_truth = self._build_ground_truth_lookup()
         records: list[DetectionRecord] = []
@@ -155,6 +138,7 @@ class DetectionPipeline(ABC):
                 location_type=outcome.kind,
                 location=outcome.location,
                 detection_quality=round(outcome.quality, 4),
+                instance_count=outcome.instance_count,
                 ground_truth_species=gt_species,
                 correct=is_correct,
                 image_path=str(image_path),
@@ -165,12 +149,19 @@ class DetectionPipeline(ABC):
         return records
 
     def _save_mask(self, outcome: LocalisationResult, stem: str) -> Path:
-        """Persist a binary mask PNG when the pipeline produced one."""
+        """Persist binary mask PNG(s) when the pipeline produced one or more."""
         if outcome.mask is None:
             return Path("")
-        mask_path = self.output_dir / "masks" / f"{stem}_mask.png"
-        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        masks_dir = self.output_dir / "masks"
+        masks_dir.mkdir(parents=True, exist_ok=True)
+        # Save the best (representative) mask
+        mask_path = masks_dir / f"{stem}_mask.png"
         cv2.imwrite(str(mask_path), (outcome.mask.astype(np.uint8) * 255))
+        # Save all individual instance masks when SAM 3 returned multiple
+        if outcome.all_masks and len(outcome.all_masks) > 1:
+            for i, m in enumerate(outcome.all_masks):
+                inst_path = masks_dir / f"{stem}_instance_{i:02d}.png"
+                cv2.imwrite(str(inst_path), (m.astype(np.uint8) * 255))
         return mask_path
 
     def _print_summary(self, out_csv: Path) -> None:
