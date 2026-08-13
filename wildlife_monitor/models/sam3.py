@@ -1,18 +1,16 @@
 """
-SAM 3 concept segmenter (Package P2).
+SAM 3 concept segmenter — multi-instance, text-prompted (Package P2).
 
-SAM 3 (Meta, November 2025) introduced Promptable Concept Segmentation:
-given a plain text noun phrase it finds and segments every instance of
-that concept in an image, with no geometric prompt and no separate
-detector. This is exactly what the standalone text-prompted pipeline
-wants, so this pipeline is upgraded from the old Grounded-SAM 2 stack to
-SAM 3 via the Ultralytics integration.
+SAM 3 (Meta, November 2025) accepts a plain-text species concept and finds
+every instance of that concept in the image simultaneously. This is the key
+upgrade over SAM 1: SAM 3 returns N masks — one per individual animal found
+— rather than one mask for the dominant central object.
 
-Availability is handled gracefully. SAM 3 weights (``sam3.pt``) are gated
-on Hugging Face and must be downloaded manually; when they are absent this
-class transparently falls back to SAM 1 with a centre-cross prompt so the
-pipeline always runs. The active backend is reported so results can be
-interpreted correctly.
+The instance count (N) is the primary contribution to Pipeline 2's social
+structure classification: solitary (1), small group (2–5), large herd (6+).
+
+When SAM 3 weights are absent the segmenter falls back to SAM 1, which
+returns a single mask and instance_count=1.
 """
 
 from __future__ import annotations
@@ -23,37 +21,36 @@ from wildlife_monitor.config import SAM3_CHECKPOINT, SAM3_CONF
 from wildlife_monitor.models.sam1 import SAM1Segmenter
 
 
-# Map internal normalised labels to natural-language concept prompts so
-# SAM 3 receives phrases it understands ("thomsons gazelle", not
-# "gazellethomsons").
 _CONCEPT_PROMPTS = {
     "gazellethomsons": "thomsons gazelle",
-    "lionfemale": "female lion",
-    "lionmale": "male lion",
-    "lioncub": "lion cub",
-    "hyenaspotted": "spotted hyena",
-    "hyenabrown": "brown hyena",
+    "lionfemale":      "female lion",
+    "lionmale":        "male lion",
+    "lioncub":         "lion cub",
+    "hyenaspotted":    "spotted hyena",
+    "hyenabrown":      "brown hyena",
 }
 
 
 def concept_prompt_for(species: str) -> str:
-    """Return a natural-language concept prompt for a species label."""
     return _CONCEPT_PROMPTS.get(species, species)
 
 
 def sam3_weights_available() -> bool:
-    """True when the gated SAM 3 checkpoint is present on disk."""
     return SAM3_CHECKPOINT.exists()
 
 
 class SAM3Segmenter:
-    """Text-prompted concept segmenter backed by SAM 3, SAM 1 as fallback.
+    """
+    Text-prompted concept segmenter — returns ALL detected instances.
 
-    When SAM 3 weights are available the segmenter uses
-    ``SAM3SemanticPredictor`` with the species concept prompt and returns
-    the highest-confidence instance mask. Otherwise it delegates to
-    :class:`SAM1Segmenter`. Inspect :pyattr:`backend` to see which path is
-    active (``"sam3"`` or ``"sam1_fallback"``).
+    Returns
+    -------
+    masks  : list[np.ndarray]  — one boolean (H, W) array per detected animal
+    scores : list[float]       — one confidence score per mask
+    count  : int               — total number of individuals detected
+
+    The caller picks the best mask for the overlay (highest score) but stores
+    the count for Pipeline 2.
     """
 
     def __init__(self, species: str) -> None:
@@ -68,7 +65,7 @@ class SAM3Segmenter:
                 self.backend = "sam3"
                 print(f"[INFO] SAM 3 ready — concept prompt: '{self.concept}'")
                 return
-            except Exception as exc:  # pragma: no cover - install dependent
+            except Exception as exc:
                 print(f"[WARN] SAM 3 failed to load ({exc}). "
                       f"Falling back to SAM 1.")
 
@@ -78,14 +75,13 @@ class SAM3Segmenter:
 
     def _load_sam3(self) -> None:
         from ultralytics.models.sam import SAM3SemanticPredictor
-
         overrides = {
-            "conf": SAM3_CONF,
-            "task": "segment",
-            "mode": "predict",
-            "model": str(SAM3_CHECKPOINT),
+            "conf":    SAM3_CONF,
+            "task":    "segment",
+            "mode":    "predict",
+            "model":   str(SAM3_CHECKPOINT),
             "verbose": False,
-            "save": False,
+            "save":    False,
         }
         self._predictor = SAM3SemanticPredictor(overrides=overrides)
 
@@ -93,47 +89,58 @@ class SAM3Segmenter:
     def _print_sam3_hint() -> None:
         print(
             "[INFO] SAM 3 weights not found — using SAM 1 fallback.\n"
-            "       To enable true text-prompted SAM 3 segmentation:\n"
-            "         1. pip install -U ultralytics   (>= 8.3.237)\n"
+            "       To enable SAM 3:\n"
+            "         1. pip install -U ultralytics (>= 8.3.237)\n"
             "         2. Request access + download sam3.pt from\n"
             "            https://huggingface.co/facebook/sam3\n"
             "         3. Place sam3.pt in the models/ directory."
         )
 
-    def segment(self, image_rgb: np.ndarray) -> tuple[np.ndarray | None, float]:
-        """Return the best mask and its confidence for one image."""
+    def segment_all(
+        self, image_rgb: np.ndarray
+    ) -> tuple[list[np.ndarray], list[float], int]:
+        """
+        Segment ALL instances of the species concept in one image.
+
+        Returns
+        -------
+        masks  : list of boolean (H, W) arrays, one per detected individual
+        scores : confidence score per mask
+        count  : number of individuals detected (len(masks))
+        """
         if self.backend == "sam1_fallback":
             assert self._fallback is not None
-            return self._fallback.segment(image_rgb)
+            mask, score = self._fallback.segment(image_rgb)
+            if mask is None:
+                return [], [], 0
+            return [mask], [score], 1
 
-        # SAM 3 concept segmentation. The predictor accepts an image and a
-        # list of text concepts, returning masks for all matching instances.
+        # SAM 3 multi-instance segmentation
         self._predictor.set_image(image_rgb)
         results = self._predictor(text=[self.concept])
-
-        mask, score = self._best_instance(results)
-        return mask, score
+        return self._all_instances(results)
 
     @staticmethod
-    def _best_instance(results) -> tuple[np.ndarray | None, float]:
-        """Extract the highest-confidence instance mask from SAM 3 output."""
+    def _all_instances(
+        results,
+    ) -> tuple[list[np.ndarray], list[float], int]:
+        """Extract ALL detected instance masks above the confidence threshold."""
         if results is None:
-            return None, 0.0
+            return [], [], 0
 
-        # Ultralytics returns a Results object (or list of them) carrying
-        # .masks (segmentation) and .boxes (with per-instance confidence).
         result = results[0] if isinstance(results, (list, tuple)) else results
-        masks = getattr(result, "masks", None)
-        boxes = getattr(result, "boxes", None)
+        masks  = getattr(result, "masks", None)
+        boxes  = getattr(result, "boxes", None)
+
         if masks is None or masks.data is None or len(masks.data) == 0:
-            return None, 0.0
+            return [], [], 0
 
-        mask_array = masks.data.cpu().numpy()  # (N, H, W)
+        mask_array = masks.data.cpu().numpy()   # (N, H, W)
+
         if boxes is not None and boxes.conf is not None and len(boxes.conf):
-            confidences = boxes.conf.cpu().numpy()
-            best = int(np.argmax(confidences))
-            score = float(confidences[best])
+            confidences = boxes.conf.cpu().numpy().tolist()
         else:
-            best, score = 0, 1.0
+            confidences = [1.0] * len(mask_array)
 
-        return mask_array[best].astype(bool), score
+        bool_masks = [mask_array[i].astype(bool) for i in range(len(mask_array))]
+        return bool_masks, confidences, len(bool_masks)
