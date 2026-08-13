@@ -1,0 +1,25 @@
+# Core numerical / imaging
+numpy>=1.24
+pandas>=2.0
+opencv-python>=4.8
+pillow>=10.0
+tqdm>=4.65
+
+# Deep learning
+torch>=2.1
+torchvision>=0.16
+
+# BioCLIP (vision-language retrieval)
+open-clip-torch>=2.24
+
+# SAM 1 (BioCLIP+SAM pipeline and SAM 3 fallback)
+segment-anything>=1.0
+
+# YOLOv11 + SAM 3 (Ultralytics; SAM 3 requires >= 8.3.237)
+ultralytics>=8.3.237
+
+# Dashboard (Streamlit UI)
+streamlit>=1.35
+plotly>=5.20
+folium>=0.16
+streamlit-folium>=0.20

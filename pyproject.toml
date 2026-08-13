@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wildlife-monitor"
+version = "1.0.0"
+description = "Multimodal wildlife monitoring for camera trap imagery"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "opencv-python>=4.8",
+    "pillow>=10.0",
+    "tqdm>=4.65",
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "open-clip-torch>=2.24",
+    "segment-anything>=1.0",
+    "ultralytics>=8.3.237",
+]
+
+[tool.setuptools.packages.find]
+include = ["wildlife_monitor*"]

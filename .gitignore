@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data and model weights are large; keep them out of version control.
+data/images/
+models/*.pth
+models/*.pt
+results/
+config.json
