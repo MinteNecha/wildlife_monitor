@@ -10,3 +10,5 @@ models/*.pth
 models/*.pt
 results/
 config.json
+*images/
+*.pt
