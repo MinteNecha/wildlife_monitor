@@ -12,3 +12,4 @@ results/
 config.json
 images/
 *.pt
+data/*
