@@ -50,6 +50,12 @@ class DetectionRecord:
     # Quality / evaluation
     detection_quality: float      # SAM quality score OR YOLO confidence
 
+    # Multi-instance counting
+    # How many individuals of the target species were detected in this image.
+    # SAM 3 and MegaDetector return all instances; YOLO and SAM 1 return one.
+    # This is the primary input to Pipeline 2 social structure classification.
+    instance_count: int
+
     # File paths (image_path is required; mask and overlay are optional)
     image_path: str
 
