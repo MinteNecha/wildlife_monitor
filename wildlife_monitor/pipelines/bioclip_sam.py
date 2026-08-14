@@ -60,17 +60,24 @@ class BioCLIPSAMPipeline(DetectionPipeline):
         masks, scores, count = self._segmenter.segment_all(image_rgb)
 
         if count > 0:
-            # Best mask = highest SAM 3 confidence — used for the overlay
-            best_idx    = int(np.argmax(scores))
-            best_mask   = masks[best_idx]
-            best_score  = scores[best_idx]
-            result_img  = draw_mask(image_bgr, best_mask, species)
+            # Best mask = highest SAM 3 confidence score
+            best_idx   = int(np.argmax(scores))
+            best_mask  = masks[best_idx]
+            best_score = scores[best_idx]
+
+            # Draw ALL instance masks on the overlay so the full count
+            # is visually clear — each mask is drawn with the same species
+            # colour at 45% opacity and a solid outline.
+            result_img = image_bgr.copy()
+            for m in masks:
+                result_img = draw_mask(result_img, m, species)
+
             return LocalisationResult(
                 kind="mask",
                 result_image=result_img,
                 location="mask_saved",
                 quality=best_score,
-                mask=best_mask,
+                mask=best_mask,       # best mask saved as the PNG file
                 instance_count=count,
                 all_masks=masks,
             )
