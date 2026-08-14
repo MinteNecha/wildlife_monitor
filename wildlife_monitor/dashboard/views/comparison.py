@@ -13,7 +13,7 @@ from wildlife_monitor.dashboard.theme import PLOT, GRID, PIPELINE_COLOURS, GREY,
 
 def render(species: str) -> None:
     header("Pipeline Comparison",
-           "BioCLIP+SAM vs BioCLIP+YOLO vs SAM 3 · UC3")
+           "BioCLIP+SAM 3 vs BioCLIP+YOLO vs BioCLIP+MegaDetector · UC3")
 
     detections = da.load_all_detections(species)
     if not detections:
@@ -73,7 +73,18 @@ def _quality_and_report(species, detections) -> None:
         st.subheader("Comparison Report")
         report = da.load_comparison_report(species)
         if report:
-            st.code(report, language="text")
+            # Use a styled div so the report is always readable
+            # regardless of Streamlit theme (st.code uses dark bg).
+            escaped = report.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            st.markdown(
+                f"<div style='"
+                f"background:#FFFFFF;color:#111111;font-family:monospace;"
+                f"font-size:11px;line-height:1.5;padding:12px;"
+                f"border:1px solid #D0D5D2;border-radius:4px;"
+                f"white-space:pre;overflow-x:auto;max-height:420px;"
+                f"overflow-y:auto'>{escaped}</div>",
+                unsafe_allow_html=True,
+            )
         else:
             st.info(f"No comparison report yet.\n\nRun: "
                     f"python scripts/run_compare.py --species {species}")
