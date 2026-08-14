@@ -22,17 +22,40 @@ def render(species: str, pipeline: str) -> None:
         horizontal=True, label_visibility="collapsed")
 
     if view == "Detection Overlays":
-        _render_overlays(pipeline)
+        _render_overlays(pipeline, species)
     else:
         _render_detections(species, pipeline, want_correct=view.startswith("Correct"))
 
 
-def _render_overlays(pipeline: str) -> None:
-    paths = da.overlay_paths(pipeline)
-    if not paths:
+def _render_overlays(pipeline: str, species: str) -> None:
+    """Show overlays filtered to the selected species only."""
+    all_paths = da.overlay_paths(pipeline)
+    if not all_paths:
         st.info(f"No overlays for {da.PIPELINE_DISPLAY.get(pipeline, {}).get('label', pipeline)}. "
                 f"Run the pipeline to generate them.")
         return
+
+    # Filter overlay paths to those belonging to the selected species.
+    # The detections CSV tells us exactly which image stems were processed
+    # for this species — use those stems to filter the overlay folder.
+    frame = da.load_detections(pipeline, species)
+    if not frame.empty and "image_path" in frame.columns:
+        import pathlib
+        valid_stems = {
+            pathlib.Path(str(p)).stem
+            for p in frame["image_path"].dropna()
+        }
+        paths = [p for p in all_paths if p.stem.replace("_overlay", "") in valid_stems]
+        if not paths:
+            # Fallback: match by overlay stem containing species name
+            paths = all_paths
+    else:
+        paths = all_paths
+
+    if not paths:
+        st.info(f"No overlays found for {da.pretty(species)}. Run the pipeline first.")
+        return
+
     count = image_count_slider(len(paths))
     selected = paths[:count]
     for start in range(0, len(selected), 3):
