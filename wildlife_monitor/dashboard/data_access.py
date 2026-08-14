@@ -38,7 +38,7 @@ PRETTY_NAMES = {
 PIPELINE_DISPLAY = {
     "bioclip_sam": {"label": "BioCLIP + SAM", "output": "Segmentation mask"},
     "bioclip_yolo": {"label": "BioCLIP + YOLO", "output": "Bounding box"},
-    "sam3": {"label": "SAM 3", "output": "Concept mask"},
+    "bioclip_megadetector": {"label": "SAM 3", "output": "Concept mask"},
 }
 
 # Values in the ``location`` column that mean "nothing was localised".
@@ -150,3 +150,72 @@ def _ground_truth_lookup(species: str) -> dict[str, str]:
         return {}
     return dict(zip(subset["image_id"].astype(str),
                     subset["species_label"].astype(str)))
+
+
+# ── Evaluation data access ────────────────────────────────────────────────────
+
+EVAL_DIR = RESULTS_DIR / "evaluation"
+
+
+def evaluation_available() -> bool:
+    """True when the multi-species evaluation results CSV exists."""
+    return (EVAL_DIR / "evaluation_results.csv").exists()
+
+
+def comparison_available() -> bool:
+    """True when the BioCLIP vs SAM 3 comparison results CSV exists."""
+    return (EVAL_DIR / "bioclip_vs_sam3_results.csv").exists()
+
+
+def load_evaluation_results() -> pd.DataFrame:
+    """Load the multi-species BioCLIP evaluation results."""
+    path = EVAL_DIR / "evaluation_results.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def load_comparison_results() -> pd.DataFrame:
+    """Load the BioCLIP vs SAM 3 comparison results."""
+    path = EVAL_DIR / "bioclip_vs_sam3_results.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def load_evaluation_summary() -> str:
+    """Load the BioCLIP vs SAM 3 comparison summary text."""
+    path = EVAL_DIR / "bioclip_vs_sam3_summary.txt"
+    return path.read_text() if path.exists() else ""
+
+
+def evaluation_species_list() -> list[str]:
+    """Return the species present in the evaluation results."""
+    frame = load_evaluation_results()
+    if frame.empty or "true_species" not in frame.columns:
+        return []
+    return sorted(frame["true_species"].unique().tolist())
+
+
+def per_species_accuracy(frame: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-species accuracy summary from an evaluation frame."""
+    if frame.empty:
+        return pd.DataFrame()
+    rows = []
+    for sp, group in frame.groupby("true_species"):
+        n = len(group)
+        correct_col = (
+            "bioclip_correct" if "bioclip_correct" in frame.columns
+            else "correct"
+        )
+        c = int(group[correct_col].sum()) if correct_col in group.columns else 0
+        rows.append({
+            "species":       sp,
+            "display_name":  pretty(sp),
+            "images":        n,
+            "correct":       c,
+            "accuracy_pct":  round(c / n * 100, 1) if n else 0.0,
+        })
+    return (pd.DataFrame(rows)
+              .sort_values("accuracy_pct", ascending=False)
+              .reset_index(drop=True))
