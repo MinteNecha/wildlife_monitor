@@ -33,8 +33,8 @@ Usage:
     python scripts/compare_models.py --top_n 15
 
 Output:
-    results/evaluation/bioclip_vs_sam3_results.csv
-    results/evaluation/bioclip_vs_sam3_summary.txt
+    results/evaluation/bioclip_vs_megadetector_results.csv
+    results/evaluation/bioclip_vs_megadetector_summary.txt
 """
 
 from __future__ import annotations
@@ -152,9 +152,9 @@ def run_sam3_evaluation(
             except Exception as e:
                 print(f"\n  [WARN] Could not read {img_path.name}: {e}")
                 sam3_results[image_id] = {
-                    "sam3_localised": False,
-                    "sam3_quality":   0.0,
-                    "sam3_backend":   getattr(segmenter, "backend", "unknown"),
+                    "megadetector_localised": False,
+                    "megadetector_quality":   0.0,
+                    "megadetector_backend":   getattr(segmenter, "backend", "unknown"),
                 }
                 continue
 
@@ -162,9 +162,9 @@ def run_sam3_evaluation(
             localised = mask is not None and quality > 0.0
 
             sam3_results[image_id] = {
-                "sam3_localised": localised,
-                "sam3_quality":   round(quality, 4),
-                "sam3_backend":   segmenter.backend,
+                "megadetector_localised": localised,
+                "megadetector_quality":   round(quality, 4),
+                "megadetector_backend":   segmenter.backend,
             }
 
         total_elapsed += time.time() - start
@@ -182,9 +182,9 @@ def build_combined_results(
     rows = []
     for image_id, bc in bioclip_results.items():
         s3 = sam3_results.get(image_id, {
-            "sam3_localised": False, "sam3_quality": 0.0, "sam3_backend": "unknown"
+            "megadetector_localised": False, "megadetector_quality": 0.0, "megadetector_backend": "unknown"
         })
-        combined_correct = bc["bioclip_correct"] and s3["sam3_localised"]
+        combined_correct = bc["bioclip_correct"] and s3["megadetector_localised"]
         rows.append({
             "image_id":           image_id,
             "image_path":         bc["image_path"],
@@ -193,9 +193,9 @@ def build_combined_results(
             "bioclip_correct":    bc["bioclip_correct"],
             "bioclip_score":      bc["bioclip_score"],
             "bioclip_true_score": bc["bioclip_true_score"],
-            "sam3_localised":     s3["sam3_localised"],
-            "sam3_quality":       s3["sam3_quality"],
-            "sam3_backend":       s3["sam3_backend"],
+            "megadetector_localised":     s3["megadetector_localised"],
+            "megadetector_quality":       s3["megadetector_quality"],
+            "megadetector_backend":       s3["megadetector_backend"],
             "combined_correct":   combined_correct,
         })
     return pd.DataFrame(rows)
@@ -209,7 +209,7 @@ def print_report(
 ) -> str:
     total = len(frame)
     bc_correct = int(frame["bioclip_correct"].sum())
-    s3_localised = int(frame["sam3_localised"].sum())
+    s3_localised = int(frame["megadetector_localised"].sum())
     combined = int(frame["combined_correct"].sum())
 
     lines = [
@@ -247,9 +247,9 @@ def print_report(
             continue
         n = len(sp_frame)
         bc_acc = sp_frame["bioclip_correct"].mean() * 100
-        s3_acc = sp_frame["sam3_localised"].mean() * 100
+        s3_acc = sp_frame["megadetector_localised"].mean() * 100
         cb_acc = sp_frame["combined_correct"].mean() * 100
-        winner = "BioCLIP" if bc_acc > s3_acc else "SAM 3"
+        winner = "BioCLIP" if bc_acc > s3_acc else "MegaDetector"
         lines.append(
             f"{sp:<22} {bc_acc:>9.1f}% {s3_acc:>7.1f}% "
             f"{cb_acc:>9.1f}% {n:>4}"
@@ -315,14 +315,14 @@ def run(species_filter: list[str] | None = None, top_n: int | None = None) -> No
     # ── Merge and save ────────────────────────────────────────────────────────
     combined = build_combined_results(bioclip_results, sam3_results)
 
-    out_csv = OUTPUT_DIR / "bioclip_vs_sam3_results.csv"
+    out_csv = OUTPUT_DIR / "bioclip_vs_megadetector_results.csv"
     combined.to_csv(out_csv, index=False)
     print(f"\n[INFO] Saved {len(combined)} rows -> {out_csv}")
 
     report = print_report(combined, target, bioclip_elapsed, sam3_elapsed)
     print("\n" + report)
 
-    summary_path = OUTPUT_DIR / "bioclip_vs_sam3_summary.txt"
+    summary_path = OUTPUT_DIR / "bioclip_vs_megadetector_summary.txt"
     summary_path.write_text(report, encoding="utf-8")
     print(f"[INFO] Summary saved -> {summary_path}")
 
