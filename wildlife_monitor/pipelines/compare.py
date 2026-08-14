@@ -20,13 +20,13 @@ import pandas as pd
 from wildlife_monitor.config import RESULTS_DIR
 from wildlife_monitor.pipelines.bioclip_sam import BioCLIPSAMPipeline
 from wildlife_monitor.pipelines.bioclip_yolo import BioCLIPYOLOPipeline
-from wildlife_monitor.pipelines.sam3 import SAM3Pipeline
+from wildlife_monitor.pipelines.megadetector import MegaDetectorPipeline
 from wildlife_monitor.utils import DetectionRepository
 
 COMPARE_DIR = RESULTS_DIR / "comparison"
 
 # The pipelines to run, in report column order.
-PIPELINES = [BioCLIPSAMPipeline, BioCLIPYOLOPipeline, SAM3Pipeline]
+PIPELINES = [BioCLIPSAMPipeline, BioCLIPYOLOPipeline, MegaDetectorPipeline]
 
 
 class PipelineComparator:
@@ -102,7 +102,7 @@ class PipelineComparator:
 
         panels = [original]
         labels = ["Original"]
-        for name in ("bioclip_sam", "bioclip_yolo", "sam3"):
+        for name in ("bioclip_sam", "bioclip_yolo", "bioclip_megadetector"):
             panel = np.zeros_like(original)
             if name in overlays and Path(overlays[name]).exists():
                 full = cv2.imread(overlays[name])
@@ -136,7 +136,7 @@ class PipelineComparator:
             f"{'Metric':<28} {'BioCLIP+SAM':>13} {'BioCLIP+YOLO':>14} {'SAM 3':>8}",
             "-" * 66,
         ]
-        order = ["bioclip_sam", "bioclip_yolo", "sam3"]
+        order = ["bioclip_sam", "bioclip_yolo", "bioclip_megadetector"]
 
         def emit(label: str, value_fn) -> None:
             values = [value_fn(name) for name in order]
