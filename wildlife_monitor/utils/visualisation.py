@@ -113,4 +113,4 @@ def save_overlay(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     params = [int(cv2.IMWRITE_JPEG_QUALITY), 92]
-    cv2.imwrite(str(out_path), canvas, params)
+    cv2.imwrite(str(out_path), canvas)
