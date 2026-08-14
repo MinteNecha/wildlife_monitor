@@ -36,9 +36,18 @@ PRETTY_NAMES = {
 
 # Display metadata for each pipeline, keyed by the pipeline name.
 PIPELINE_DISPLAY = {
-    "bioclip_sam": {"label": "BioCLIP + SAM", "output": "Segmentation mask"},
-    "bioclip_yolo": {"label": "BioCLIP + YOLO", "output": "Bounding box"},
-    "bioclip_megadetector": {"label": "SAM 3", "output": "Concept mask"},
+    "bioclip_sam": {
+        "label":  "BioCLIP + SAM 3",
+        "output": "Multi-instance pixel masks",
+    },
+    "bioclip_yolo": {
+        "label":  "BioCLIP + YOLO",
+        "output": "Bounding box (single best)",
+    },
+    "bioclip_megadetector": {
+        "label":  "BioCLIP + MegaDetector",
+        "output": "Multi-instance bounding boxes",
+    },
 }
 
 # Values in the ``location`` column that mean "nothing was localised".
@@ -164,7 +173,7 @@ def evaluation_available() -> bool:
 
 def comparison_available() -> bool:
     """True when the BioCLIP vs SAM 3 comparison results CSV exists."""
-    return (EVAL_DIR / "bioclip_vs_sam3_results.csv").exists()
+    return (EVAL_DIR / "bioclip_vs_megadetector_results.csv").exists()
 
 
 def load_evaluation_results() -> pd.DataFrame:
@@ -177,7 +186,7 @@ def load_evaluation_results() -> pd.DataFrame:
 
 def load_comparison_results() -> pd.DataFrame:
     """Load the BioCLIP vs SAM 3 comparison results."""
-    path = EVAL_DIR / "bioclip_vs_sam3_results.csv"
+    path = EVAL_DIR / "bioclip_vs_megadetector_results.csv"
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
@@ -185,7 +194,7 @@ def load_comparison_results() -> pd.DataFrame:
 
 def load_evaluation_summary() -> str:
     """Load the BioCLIP vs SAM 3 comparison summary text."""
-    path = EVAL_DIR / "bioclip_vs_sam3_summary.txt"
+    path = EVAL_DIR / "bioclip_vs_megadetector_summary.txt"
     return path.read_text() if path.exists() else ""
 
 
