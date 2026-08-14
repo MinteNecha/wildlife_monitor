@@ -125,7 +125,7 @@ class PipelineComparator:
 
         canvas = np.vstack([bar, np.hstack(header_strips), np.hstack(panels)])
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_path), canvas, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        cv2.imwrite(str(out_path), canvas)
 
     def _write_report(self) -> None:
         lines = [
