@@ -112,4 +112,5 @@ def save_overlay(
     canvas = np.vstack([bar, headers, panels])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out_path), canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    params = [int(cv2.IMWRITE_JPEG_QUALITY), 92]
+    cv2.imwrite(str(out_path), canvas, params)
