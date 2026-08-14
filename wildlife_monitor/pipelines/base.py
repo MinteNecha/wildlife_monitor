@@ -4,9 +4,7 @@ Abstract detection pipeline (Package P2).
 Defines the common interface and shared workflow for every pipeline. A
 concrete pipeline supplies a name, an output directory, and a
 :meth:`localise` implementation; the base class handles image loading,
-record assembly, overlay saving, and CSV persistence. This keeps the
-three pipelines free of duplicated boilerplate and guarantees they all
-produce identical output structure.
+record assembly, overlay saving, and CSV persistence.
 """
 
 from __future__ import annotations
@@ -26,13 +24,7 @@ from wildlife_monitor.utils import DetectionRecord, DetectionRepository, save_ov
 
 
 class LocalisationResult:
-    """The outcome of localising one image.
-
-    ``kind`` is ``"mask"`` or ``"bbox"``. ``result_image`` is the overlay
-    panel to display. ``location`` is the serialised location string and
-    ``quality`` is the backend's quality/confidence score. ``mask`` is the
-    binary mask to persist, when the pipeline produces one.
-    """
+    """The outcome of localising one image."""
 
     def __init__(
         self,
@@ -41,25 +33,28 @@ class LocalisationResult:
         location: str,
         quality: float,
         mask: np.ndarray | None = None,
+        instance_count: int = 1,
+        all_masks: list | None = None,
     ) -> None:
         self.kind = kind
         self.result_image = result_image
         self.location = location
         self.quality = quality
         self.mask = mask
+        self.instance_count = instance_count
+        self.all_masks = all_masks
 
 
 class DetectionPipeline(ABC):
     """Common workflow for all Pipeline 1 configurations."""
 
-    #: Short pipeline identifier, e.g. ``"bioclip_sam"``.
     name: str = "abstract"
 
     def __init__(self) -> None:
         self.output_dir = RESULTS_DIR / self.name
         self.config = SystemConfig.instance()
 
-    # ── Per-pipeline hooks ────────────────────────────────────────────────────
+    # ── Per-pipeline hooks ─────────────────────────────────────────────────────
     @abstractmethod
     def select_images(self, frame: pd.DataFrame, species: str) -> pd.DataFrame:
         """Return the subset of images this pipeline will process."""
@@ -71,7 +66,7 @@ class DetectionPipeline(ABC):
     ) -> LocalisationResult:
         """Localise the target species in one image."""
 
-    # ── Shared driver ─────────────────────────────────────────────────────────
+    # ── Shared driver ──────────────────────────────────────────────────────────
     def run(self, species: str, top_n: int | None = None) -> Path:
         """Run the pipeline for a species and return the output CSV path."""
         top_n = top_n if top_n is not None else self.config.top_n
@@ -89,8 +84,28 @@ class DetectionPipeline(ABC):
         self._print_summary(out_csv)
         return out_csv
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-    def _process(self, frame: pd.DataFrame, species: str) -> list[DetectionRecord]:
+    # ── Internal helpers ───────────────────────────────────────────────────────
+    @staticmethod
+    def _build_ground_truth_lookup() -> dict[str, str]:
+        """Build image_id -> ground_truth_species mapping from subset CSV."""
+        if not SUBSET_CSV.exists():
+            alt = SUBSET_CSV.parent.parent / "data" / "subset_metadata.csv"
+            if not alt.exists():
+                return {}
+            csv_path = alt
+        else:
+            csv_path = SUBSET_CSV
+        frame = pd.read_csv(csv_path)
+        if not {"image_id", "species_label"} <= set(frame.columns):
+            return {}
+        return dict(zip(
+            frame["image_id"].astype(str),
+            frame["species_label"].astype(str),
+        ))
+
+    def _process(
+        self, frame: pd.DataFrame, species: str
+    ) -> list[DetectionRecord]:
         ground_truth = self._build_ground_truth_lookup()
         records: list[DetectionRecord] = []
 
@@ -154,7 +169,6 @@ class DetectionPipeline(ABC):
             return Path("")
         masks_dir = self.output_dir / "masks"
         masks_dir.mkdir(parents=True, exist_ok=True)
-        # Save the best (representative) mask
         mask_path = masks_dir / f"{stem}_mask.png"
         cv2.imwrite(str(mask_path), (outcome.mask.astype(np.uint8) * 255))
         # Save all individual instance masks when SAM 3 returned multiple
