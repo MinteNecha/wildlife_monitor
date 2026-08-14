@@ -47,6 +47,7 @@ class BioCLIPYOLOPipeline(DetectionPipeline):
                 location=f"{x1},{y1},{x2},{y2}",
                 quality=yolo_conf,
                 mask=None,
+                instance_count=1,   # YOLO returns single best box only
             )
         return LocalisationResult(
             kind="bbox", result_image=image_bgr.copy(),
