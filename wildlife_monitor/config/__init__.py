@@ -6,6 +6,7 @@ from wildlife_monitor.config.settings import (
     BIOCLIP_MODEL, SAM1_CHECKPOINT, SAM1_URL, SAM3_CHECKPOINT,
     YOLO_MODEL, PROMPT_TEMPLATE, SAM_CROSS_OFFSET, SAM3_CONF,
     ANIMAL_COCO_IDS, DEFAULT_TOP_N, TARGET_SPECIES,
+    MEGADETECTOR_CONF,
     SystemConfig, ensure_directories,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "BIOCLIP_MODEL", "SAM1_CHECKPOINT", "SAM1_URL", "SAM3_CHECKPOINT",
     "YOLO_MODEL", "PROMPT_TEMPLATE", "SAM_CROSS_OFFSET", "SAM3_CONF",
     "ANIMAL_COCO_IDS", "DEFAULT_TOP_N", "TARGET_SPECIES",
+    "MEGADETECTOR_CONF",
     "SystemConfig", "ensure_directories",
 ]
