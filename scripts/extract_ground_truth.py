@@ -79,6 +79,7 @@ def run(ann_path: Path) -> None:
 
     gt_count, gt_count_num = [], []
     gt_stand, gt_rest, gt_move, gt_inter, gt_young = [], [], [], [], []
+    gt_datetime = []
 
     matched = 0
     for _, row in df.iterrows():
@@ -93,11 +94,13 @@ def run(ann_path: Path) -> None:
             gt_move.append(ann.get("moving", 0.0))
             gt_inter.append(ann.get("interacting", 0.0))
             gt_young.append(ann.get("young_present", 0.0))
+            gt_datetime.append(ann.get("datetime", None))
         else:
             gt_count.append(None); gt_count_num.append(None)
             gt_stand.append(None); gt_rest.append(None)
             gt_move.append(None); gt_inter.append(None)
             gt_young.append(None)
+            gt_datetime.append(None)
 
     df["ground_truth_count"]     = gt_count
     df["ground_truth_count_num"] = gt_count_num
@@ -106,6 +109,7 @@ def run(ann_path: Path) -> None:
     df["gt_moving"]              = gt_move
     df["gt_interacting"]         = gt_inter
     df["gt_young_present"]       = gt_young
+    df["real_datetime"]          = gt_datetime
 
     print(f"Matched {matched}/{len(df)} rows ({matched/len(df)*100:.1f}%)")
 

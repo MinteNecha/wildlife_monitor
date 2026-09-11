@@ -143,7 +143,7 @@ class DetectionPipeline(ABC):
                 detection_id=str(uuid.uuid4())[:8],
                 image_id=image_id_str,
                 pipeline=self.name,
-                timestamp=str(row.get("date_captured", "")),
+                timestamp=str(row.get("real_datetime", "")),
                 camera_id=str(row.get("site_id", "")),
                 latitude=float(row.get("latitude", 0.0)),
                 longitude=float(row.get("longitude", 0.0)),
