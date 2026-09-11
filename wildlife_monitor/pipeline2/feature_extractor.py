@@ -53,4 +53,6 @@ def build_feature_vector(timestamp: str, instance_count: int,) -> list[float]:
     sin_hour, cos_hour = cyclic_hour_encoding(hour)
     sin_day, cos_day = cyclcic_day_encoding(day)
 
-    return [sin_hour, cos_hour, sin_day, cos_day, float(instance_count),]
+    log_count = math.log(instance_count + 1)
+
+    return [sin_hour, cos_hour, sin_day, cos_day, log_count,]
