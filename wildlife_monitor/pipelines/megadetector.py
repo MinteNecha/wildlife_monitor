@@ -47,10 +47,10 @@ class MegaDetectorPipeline(DetectionPipeline):
         super().__init__()
         self._detector: MegaDetector | None = None
 
-    def select_images(self, frame: pd.DataFrame, species: str) -> pd.DataFrame:
+    def select_images(self, frame: pd.DataFrame, species: str, top_n: int) -> pd.DataFrame:
         """Rank images with BioCLIP, then load MegaDetector."""
         bioclip = BioCLIPModel()
-        ranked = bioclip.rank_by_species(frame, species, self.config.top_n)
+        ranked = bioclip.rank_by_species(frame, species, top_n)
         bioclip.release()
         self._detector = MegaDetector()
         print(f"[INFO] Pipeline 1c backend: {self._detector.backend}")

@@ -56,7 +56,7 @@ class DetectionPipeline(ABC):
 
     # ── Per-pipeline hooks ─────────────────────────────────────────────────────
     @abstractmethod
-    def select_images(self, frame: pd.DataFrame, species: str) -> pd.DataFrame:
+    def select_images(self, frame: pd.DataFrame, species: str, top_n: int) -> pd.DataFrame:
         """Return the subset of images this pipeline will process."""
 
     @abstractmethod
@@ -76,7 +76,7 @@ class DetectionPipeline(ABC):
         if frame.empty:
             return self.output_dir / f"detections_{species}.csv"
 
-        selected = self.select_images(frame, species)
+        selected = self.select_images(frame, species, top_n)
         records = self._process(selected, species)
 
         out_csv = self.output_dir / f"detections_{species}.csv"

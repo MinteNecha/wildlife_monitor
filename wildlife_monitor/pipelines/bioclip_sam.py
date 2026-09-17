@@ -38,10 +38,10 @@ class BioCLIPSAMPipeline(DetectionPipeline):
         super().__init__()
         self._segmenter: SAM3Segmenter | None = None
 
-    def select_images(self, frame: pd.DataFrame, species: str) -> pd.DataFrame:
+    def select_images(self, frame: pd.DataFrame, species: str, top_n: int) -> pd.DataFrame:
         """Rank images with BioCLIP, then load SAM 3 for localisation."""
         bioclip = BioCLIPModel()
-        ranked = bioclip.rank_by_species(frame, species, self.config.top_n)
+        ranked = bioclip.rank_by_species(frame, species, top_n)
         bioclip.release()   # free GPU memory before loading SAM 3
         self._segmenter = SAM3Segmenter(species)
         print(f"[INFO] Pipeline 1a backend: {self._segmenter.backend}")
