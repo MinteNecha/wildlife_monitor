@@ -13,6 +13,8 @@ IMAGES_PER_SPECIES = None        # None = no cap, take every available image
 
 TARGET_SPECIES = [
     "buffalo",
+    "lionfemale",
+    "gazellethomsons",
 ]        
 
 METADATA_URL = (
@@ -239,11 +241,25 @@ def main():
         return
 
     df = download_images(df)
+
+    # Merge with any existing subset_metadata.csv rather than overwriting it,
+    # so multiple species can be accumulated across separate runs of this script.
+    if SUBSET_PATH.exists():
+        existing = pd.read_csv(SUBSET_PATH)
+        already_have = set(existing["species_label"].unique())
+        new_species = set(df["species_label"].unique())
+        overlap = already_have & new_species
+        if overlap:
+            print(f"[WARN] Species {overlap} already present in {SUBSET_PATH} — "
+                  f"replacing their rows with this run's results.")
+            existing = existing[~existing["species_label"].isin(overlap)]
+        df = pd.concat([existing, df], ignore_index=True)
+
     df.to_csv(SUBSET_PATH, index=False)
 
-    print(f"\n[DONE] Subset saved → {SUBSET_PATH}  ({len(df)} rows)")
-    print(df[["species_label", "site_id", "latitude", "longitude",
-              "habitat_type"]].head(20).to_string())
+    print(f"\n[DONE] Subset saved → {SUBSET_PATH}  ({len(df)} total rows, "
+          f"{df['species_label'].nunique()} species)")
+    print(df["species_label"].value_counts().to_string())
 
 
 if __name__ == "__main__":
