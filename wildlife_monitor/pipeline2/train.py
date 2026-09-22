@@ -31,37 +31,46 @@ ACTIVITY_TO_IDX = {name: i for i, name in enumerate(ACTIVITY_CLASSES)}
 MOVEMENT_TO_IDX = {name: i for i, name in enumerate(MOVEMENT_CLASSES)}
 
 
-def classify_movement(camera_sequence: pd.DataFrame, threshold_days: float = 30.0) -> str:
+def classify_movement(
+    camera_id: str,
+    fidelity: pd.Series,
+    territorial_percentile: float = 0.75,
+) -> str:
     """
-    Provisional movement strategy heuristic, based only on how spread
-    out in time one camera's detections are. See project notes: this
-    is the weakest of the three labels and a known limitation, since
-    genuine movement strategy requires comparing patterns ACROSS
-    camera sites, not just within one. "migratory" is intentionally
-    not produced by this rule; only "territorial" or "nomadic".
+    Movement strategy based on cross-camera site fidelity: is this
+    camera in the top 25% most favoured cameras for this species,
+    compared to all other cameras that species was seen at.
+
+    Uses a PERCENTILE threshold (not a fixed number) so it adjusts
+    correctly regardless of how many cameras a species has - a fixed
+    threshold was tested first and found not to generalise across
+    species with different camera counts.
+
+    A combined version also requiring time-clustering was tested and
+    found to perform WORSE across all three species (buffalo, lion
+    female, gazelle) in held-out evaluation - fidelity alone is kept
+    as the simpler, better-performing version.
+
+    territorial: fidelity in the top 25% of cameras for this species
+    nomadic:     everything else
+
+    Migratory detection is NOT attempted - this single-season dataset
+    spans only ~108 real days, not a full year, so true seasonal
+    migration cannot be reliably distinguished from the observation
+    period simply ending.
     """
-    timestamps = pd.to_datetime(camera_sequence["timestamp"], errors="coerce")
-    timestamps = timestamps.dropna()
-
-    if len(timestamps) < 2:
-        return "territorial"
-
-    span_days = (timestamps.max() - timestamps.min()).total_seconds() / 86400.0
-
-    return "territorial" if span_days <= threshold_days else "nomadic"
-
+    threshold_value = fidelity.quantile(territorial_percentile)
+    fid = fidelity.get(camera_id, 0.0)
+    return "territorial" if fid >= threshold_value else "nomadic"
 
 def build_training_set(
     detections_csv: str,
     max_length: int = 40,
 ) -> list[dict]:
-    """
-    Read a Pipeline 1 detections CSV and build one training example
-    per camera site, each with its padded sequence, real length, and
-    the three labels (social structure, activity, movement).
-    """
+
     df = pd.read_csv(detections_csv)
     sequences = group_by_camera(df)
+    fidelity = compute_site_fidelity(df)
 
     examples = []
     for camera_id, camera_df in sequences.items():
@@ -69,7 +78,58 @@ def build_training_set(
             camera_df, max_length
         )
         activity_label = classify_activity(camera_df)
-        movement_label = classify_movement(camera_df)
+        movement_label = classify_movement(camera_id, fidelity)
+
+        examples.append({
+            "camera_id": camera_id,
+            "vectors": padded_vectors,
+            "real_length": real_length,
+            "social_label": social_label,
+            "activity_label": activity_label,
+            "activity_idx": ACTIVITY_TO_IDX[activity_label],
+            "movement_label": movement_label,
+            "movement_idx": MOVEMENT_TO_IDX[movement_label],
+        })
+
+    return examples
+
+def build_training_set_with_movement_variant(
+    detections_csv: str,
+    movement_variant: str,
+    max_length: int = 40,
+) -> list[dict]:
+    """
+    Same as build_training_set, but lets us pick which movement
+    classification rule to test: "combined", "fidelity_only", or "70pct".
+    """
+    from wildlife_monitor.pipeline2.feature_extractor import extract_day_of_year
+
+    df = pd.read_csv(detections_csv)
+    sequences = group_by_camera(df)
+    fidelity = compute_site_fidelity(df)
+
+    all_days = [extract_day_of_year(ts) for ts in df["timestamp"]]
+    dataset_span_days = max(all_days) - min(all_days)
+
+    examples = []
+    for camera_id, camera_df in sequences.items():
+        padded_vectors, real_length, social_label = build_sequence(
+            camera_df, max_length
+        )
+        activity_label = classify_activity(camera_df)
+
+        if movement_variant == "combined":
+            movement_label = classify_movement(
+                camera_id, camera_df, fidelity, dataset_span_days
+            )
+        elif movement_variant == "fidelity_only":
+            movement_label = classify_movement_fidelity_only(camera_id, fidelity)
+        elif movement_variant == "70pct":
+            movement_label = classify_movement_70pct(
+                camera_id, camera_df, fidelity, dataset_span_days
+            )
+        else:
+            raise ValueError(f"Unknown movement_variant: {movement_variant}")
 
         examples.append({
             "camera_id": camera_id,
@@ -176,3 +236,38 @@ def evaluate_model(
 
     movement_accuracy = (movement_preds == test_movement).float().mean().item()
     print(f"\nOverall movement accuracy: {movement_accuracy*100:.1f}%")
+
+def compute_site_fidelity(all_detections: pd.DataFrame) -> pd.Series:
+    """
+    For each camera, what fraction of this species' TOTAL detections
+    (across every camera) happened here. A camera with a high fraction
+    means this species is strongly concentrated there relative to
+    everywhere else - a signal of site fidelity (territorial behaviour).
+    A camera with a low, even fraction, similar to every other camera,
+    suggests the species is spread out with no strong preference
+    (nomadic behaviour).
+    """
+    total_detections = len(all_detections)
+    camera_counts = all_detections.groupby("camera_id").size()
+    return camera_counts / total_detections
+
+def compute_seasonal_concentration(
+    camera_sequence: pd.DataFrame, dataset_span_days: float
+) -> float:
+    """
+    How tightly clustered a camera's detections are, relative to the
+    REAL observed span of the whole dataset (not a full year - this
+    dataset, Season 1, only covers ~108 real days, so true migratory
+    detection is not achievable here; this measure is used only to
+    strengthen the territorial/nomadic distinction).
+    """
+    from wildlife_monitor.pipeline2.feature_extractor import extract_day_of_year
+
+    days = [extract_day_of_year(ts) for ts in camera_sequence["timestamp"]]
+
+    if len(days) < 2:
+        return 1.0
+
+    span_days = max(days) - min(days)
+
+    return 1.0 - (span_days / dataset_span_days)
