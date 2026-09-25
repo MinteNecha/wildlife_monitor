@@ -9,7 +9,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 
-IMAGES_PER_SPECIES = None        # None = no cap, take every available image
+IMAGES_PER_SPECIES = 1500        # None = no cap, take every available image
 
 TARGET_SPECIES = [
     "buffalo",
@@ -17,9 +17,9 @@ TARGET_SPECIES = [
     "gazellethomsons",
 ]        
 
-METADATA_URL = (
+IMAGE_BASE_URL = (
     "https://lilawildlife.blob.core.windows.net/lila-wildlife/"
-    "snapshotserengeti-v-2-0/SnapshotSerengetiS01.json.zip"
+    "snapshotserengeti-unzipped/"
 )
 
 IMAGE_BASE_URL = (
@@ -28,12 +28,12 @@ IMAGE_BASE_URL = (
 )
 
 DATA_DIR  = Path("data")
-IMAGE_DIR = Path("images")
+IMAGE_DIR = Path("images_season2")
 DATA_DIR.mkdir(exist_ok=True)
 IMAGE_DIR.mkdir(exist_ok=True)
 
-JSON_PATH   = DATA_DIR / "SnapshotSerengetiS01.json"
-SUBSET_PATH = DATA_DIR / "subset_metadata.csv"
+JSON_PATH   = DATA_DIR / "SnapshotSerengetiS02.json"
+SUBSET_PATH = DATA_DIR / "subset_metadata_season2.csv"
 
 # ── Published GPS coordinates for Serengeti camera sites 
 CAMERA_GPS = {

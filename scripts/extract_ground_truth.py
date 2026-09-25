@@ -43,20 +43,15 @@ COUNT_MAP = {
 }
 
 
-def run(ann_path: Path) -> None:
+def run(ann_path: Path, csv_path: Path) -> None:
     if not ann_path.exists():
         print(f"[ERROR] Annotation file not found: {ann_path}")
         print("Set --json to the full path of SnapshotSerengetiS01.json")
         return
 
-    csv_path = SUBSET_CSV
     if not csv_path.exists():
-        alt = PROJECT_ROOT.parent / "data" / "subset_metadata.csv"
-        if alt.exists():
-            csv_path = alt
-        else:
-            print(f"[ERROR] subset_metadata.csv not found.")
-            return
+        print(f"[ERROR] {csv_path} not found.")
+        return
 
     print(f"Loading annotation JSON ({ann_path.stat().st_size // 1_000_000} MB) ...")
     with open(ann_path, encoding="utf-8") as f:
@@ -131,6 +126,8 @@ def run(ann_path: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", type=Path, default=DEFAULT_ANN_PATH,
-                        help="Path to SnapshotSerengetiS01.json")
+                        help="Path to the annotation JSON")
+    parser.add_argument("--csv", type=Path, default=SUBSET_CSV,
+                        help="Path to the subset_metadata CSV to update")
     args = parser.parse_args()
-    run(args.json)
+    run(args.json, args.csv)

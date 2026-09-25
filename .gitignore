@@ -13,3 +13,4 @@ config.json
 images/
 *.pt
 data/*
+image*

@@ -50,3 +50,12 @@ def build_sequence(camera_sequence: pd.DataFrame, max_length: int,) -> tuple[lis
         padded_vectors = vectors + [[0.0] * num_features] * padding_needed
 
     return padded_vectors, real_length, social_label
+
+def compute_site_fidelity(all_detections: pd.DataFrame) -> pd.Series:
+    """
+    For each camera, what fraction of ALL detections (across every camera)
+    happened at that one camera. High fraction = animal favours that site.
+    """
+    total_detections = len(all_detections)
+    camera_counts = all_detections.groupby("camera_id").size()
+    return camera_counts / total_detections
