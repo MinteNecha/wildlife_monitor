@@ -4,13 +4,19 @@ Abstract detection pipeline (Package P2).
 Defines the common interface and shared workflow for every pipeline. A
 concrete pipeline supplies a name, an output directory, and a
 :meth:`localise` implementation; the base class handles image loading,
-record assembly, overlay saving, and CSV persistence.
+record assembly, overlay saving, and persistence.
+
+Detections are written to the SQLite database, which is the system of record.
+Overlays and masks remain on disk as image files, with their paths stored in
+the Detection table. CSV is no longer a storage format — it is an export
+format, produced on demand by ExportService (FR8).
 """
 
 from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import asdict
 from pathlib import Path
 
 import cv2
@@ -20,7 +26,8 @@ from tqdm import tqdm
 
 from wildlife_monitor.config import RESULTS_DIR, SUBSET_CSV, SystemConfig
 from wildlife_monitor.data import load_species_subset
-from wildlife_monitor.utils import DetectionRecord, DetectionRepository, save_overlay
+from wildlife_monitor.db import save_detections
+from wildlife_monitor.utils import DetectionRecord, save_overlay
 
 
 class LocalisationResult:
@@ -67,22 +74,29 @@ class DetectionPipeline(ABC):
         """Localise the target species in one image."""
 
     # ── Shared driver ──────────────────────────────────────────────────────────
-    def run(self, species: str, top_n: int | None = None) -> Path:
-        """Run the pipeline for a species and return the output CSV path."""
+    def run(self, species: str, top_n: int | None = None) -> pd.DataFrame:
+        """Run the pipeline for a species, storing results in the database.
+
+        Returns the detections as a frame so a caller such as the comparator
+        can use them directly instead of reading them back off disk.
+        """
         top_n = top_n if top_n is not None else self.config.top_n
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         frame = load_species_subset(species)
         if frame.empty:
-            return self.output_dir / f"detections_{species}.csv"
+            print(f"[WARN] No subset images for '{species}'.")
+            return pd.DataFrame()
 
         selected = self.select_images(frame, species, top_n)
         records = self._process(selected, species)
+        if not records:
+            print(f"[WARN] {self.name}: no detections produced for '{species}'.")
+            return pd.DataFrame()
 
-        out_csv = self.output_dir / f"detections_{species}.csv"
-        DetectionRepository.save(records, out_csv)
-        self._print_summary(out_csv)
-        return out_csv
+        written = save_detections(records)
+        self._print_summary(species, written)
+        return pd.DataFrame([asdict(record) for record in records])
 
     # ── Internal helpers ───────────────────────────────────────────────────────
     @staticmethod
@@ -178,7 +192,9 @@ class DetectionPipeline(ABC):
                 cv2.imwrite(str(inst_path), (m.astype(np.uint8) * 255))
         return mask_path
 
-    def _print_summary(self, out_csv: Path) -> None:
+    def _print_summary(self, species: str, written: int) -> None:
+        from wildlife_monitor.db import DB_PATH
         print(f"\n[DONE] {self.name} pipeline complete.")
-        print(f"       Detections : {out_csv}")
+        print(f"       Species    : {species}")
+        print(f"       Detections : {written} stored in {DB_PATH}")
         print(f"       Overlays   : {self.output_dir}/overlays/")

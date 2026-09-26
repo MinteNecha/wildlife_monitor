@@ -21,7 +21,6 @@ from wildlife_monitor.config import RESULTS_DIR
 from wildlife_monitor.pipelines.bioclip_sam import BioCLIPSAMPipeline
 from wildlife_monitor.pipelines.bioclip_yolo import BioCLIPYOLOPipeline
 from wildlife_monitor.pipelines.megadetector import MegaDetectorPipeline
-from wildlife_monitor.utils import DetectionRepository
 
 COMPARE_DIR = RESULTS_DIR / "comparison"
 
@@ -56,9 +55,9 @@ class PipelineComparator:
             print(f"  Running {pipeline.name.upper()} on '{self.species}'")
             print(f"{'=' * 60}")
             start = time.time()
-            out_csv = pipeline.run(self.species, self.top_n)
+            frame = pipeline.run(self.species, self.top_n)
             self.timing[pipeline.name] = time.time() - start
-            self.frames[pipeline.name] = DetectionRepository.load(out_csv)
+            self.frames[pipeline.name] = frame
 
     def _merge_detections(self) -> None:
         present = [df for df in self.frames.values() if not df.empty]
