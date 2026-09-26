@@ -7,16 +7,15 @@ import streamlit as st
 from PIL import Image
 
 from wildlife_monitor.dashboard.components import header, rule, note
+from wildlife_monitor.data.validator import ImageValidator
 
-MIN_WIDTH, MIN_HEIGHT = 640, 480
-_ACCEPTED_FORMATS = {"JPEG", "PNG"}
+_validator = ImageValidator()
 
 
 def render(species: str) -> None:
     header("Upload Camera Trap Images",
            "Batch ingestion with format and metadata validation · UC1")
-    st.caption(f"Accepted: JPEG, PNG · Minimum resolution "
-               f"{MIN_WIDTH}×{MIN_HEIGHT} · EXIF timestamps read when present.")
+    st.caption(_validator.requirements)
 
     files = st.file_uploader("Camera trap images",
                              type=["jpg", "jpeg", "png"],
@@ -25,7 +24,7 @@ def render(species: str) -> None:
         st.info("Select one or more images. Validation runs on upload.")
         return
 
-    accepted, rejected = _validate(files)
+    accepted, rejected = _validator.validate_batch(files)
     _summary_metrics(files, accepted, rejected)
     rule()
     _results_tables(accepted, rejected)
@@ -35,34 +34,8 @@ def render(species: str) -> None:
     st.button(f"Ingest {len(accepted)} images", disabled=not accepted)
 
 
-def _validate(files) -> tuple[list[dict], list[tuple[str, str]]]:
-    accepted: list[dict] = []
-    rejected: list[tuple[str, str]] = []
-    for file in files:
-        try:
-            image = Image.open(file)
-            width, height = image.size
-            fmt = (image.format or "?").upper()
-            if fmt not in _ACCEPTED_FORMATS:
-                rejected.append((file.name, f"Unsupported format: {fmt}"))
-            elif width < MIN_WIDTH or height < MIN_HEIGHT:
-                rejected.append((file.name,
-                                 f"Resolution {width}×{height} below minimum"))
-            else:
-                exif = image.getexif()
-                timestamp = exif.get(36867) or exif.get(306)
-                accepted.append({
-                    "File": file.name, "Format": fmt,
-                    "Resolution": f"{width}×{height}",
-                    "Timestamp": timestamp or "not in EXIF",
-                    "Size (KB)": round(file.size / 1024, 1)})
-        except Exception as exc:
-            rejected.append((file.name, f"Unreadable file: {exc}"))
-    return accepted, rejected
-
-
 def _summary_metrics(files, accepted, rejected) -> None:
-    missing = sum(row["Timestamp"] == "not in EXIF" for row in accepted)
+    missing = sum(not result.details.get("has_timestamp") for result in accepted)
     for column, (label, value) in zip(st.columns(4), [
         ("Received", len(files)), ("Accepted", len(accepted)),
         ("Rejected", len(rejected)), ("No Timestamp", missing),
@@ -75,15 +48,21 @@ def _results_tables(accepted, rejected) -> None:
     with left:
         st.subheader("Accepted Files")
         if accepted:
-            st.dataframe(pd.DataFrame(accepted), width="stretch",
-                         height=240, hide_index=True)
+            table = pd.DataFrame([{
+                "File": result.details.get("name", ""),
+                "Format": result.details.get("format", ""),
+                "Resolution": result.details.get("resolution", ""),
+                "Timestamp": result.details.get("timestamp") or "not in EXIF",
+            } for result in accepted])
+            st.dataframe(table, width="stretch", height=240, hide_index=True)
         else:
             st.warning("No files passed validation.")
     with right:
         st.subheader("Rejected Files")
         if rejected:
-            for name, reason in rejected:
-                note(f"<b>{name}</b><br>{reason}", ok=False)
+            for result in rejected:
+                note(f"<b>{result.details.get('name', 'file')}</b><br>"
+                     f"{result.reason}", ok=False)
         else:
             note("All files passed validation.", ok=True)
 
@@ -94,6 +73,7 @@ def _preview(files) -> None:
     for column, file in zip(columns, files[:4]):
         with column:
             try:
+                file.seek(0)
                 st.image(Image.open(file), width="stretch")
                 st.caption(file.name[:28])
             except Exception:

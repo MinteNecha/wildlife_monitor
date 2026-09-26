@@ -6,11 +6,22 @@ import pandas as pd
 import streamlit as st
 
 from wildlife_monitor.config import SystemConfig
+from wildlife_monitor.config.validator import ConfigValidator
 from wildlife_monitor.dashboard import data_access as da
 from wildlife_monitor.dashboard.components import header, rule, note
 
+_validator = ConfigValidator()
+
+_FIELD_LABELS = {
+    "pipeline": "Detection pipeline", "threshold": "Confidence threshold",
+    "top_n": "Images per run", "arch": "Temporal architecture",
+    "device": "Device", "memory": "Max memory (GB)",
+    "activity": "Activity timing", "movement": "Movement strategy",
+    "social": "Social structure",
+}
+
 _DEFAULTS = {
-    "pipeline": "bioclip_sam",
+    "pipeline": "bioclip_megadetector",
     "threshold": 0.50,
     "arch": "LSTM",
     "device": "cuda",
@@ -55,7 +66,7 @@ def _controls() -> dict:
             float(st.session_state["threshold"]), 0.05)
         pending["top_n"] = st.number_input(
             "Images per run (top_n)", 1, 100, int(st.session_state["top_n"]), 1)
-        st.subheader("Temporal Model (Pipeline 2 — planned)")
+        st.subheader("Temporal Model (Pipeline 2)")
         pending["arch"] = st.radio(
             "Architecture", ["LSTM", "Transformer"],
             index=["LSTM", "Transformer"].index(st.session_state["arch"]),
@@ -79,11 +90,15 @@ def _controls() -> dict:
 
 
 def _validate(pending: dict) -> list[tuple[str, str]]:
-    return [(label, "needs at least two comma-separated categories")
-            for label, key in [("Activity timing", "activity"),
-                                ("Movement strategy", "movement"),
-                                ("Social structure", "social")]
-            if len([c for c in pending[key].split(",") if c.strip()]) < 2]
+    """Check every field through ConfigValidator (FR9).
+
+    The UC8 alternative flow requires the valid range to be shown next to a
+    rejected value, so the validator's own description is what gets displayed.
+    """
+    return [(_FIELD_LABELS.get(failure.details.get("key", ""),
+                                failure.details.get("key", "setting")),
+             failure.reason)
+            for failure in _validator.validate_all(pending)]
 
 
 def _apply_bar(pending: dict, errors: list) -> None:
