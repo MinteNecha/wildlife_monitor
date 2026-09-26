@@ -267,7 +267,8 @@ def print_report(
                       .sort_values("count", ascending=False).head(8))
         for _, row in confusions.iterrows():
             lines.append(
-                f"  {row["true_species"]:<18} -> {row["bioclip_predicted"]:<18} "
+                f"  {row['true_species']:<18} -> "
+                f"{row['bioclip_predicted']:<18} "
                 f"({int(row['count'])} times)"
             )
     lines.append("=" * 70)
