@@ -14,13 +14,13 @@ Pipelines:
 import argparse
 
 from wildlife_monitor.config import DEFAULT_TOP_N, TARGET_SPECIES
-from wildlife_monitor.pipelines import PIPELINE_REGISTRY
+from wildlife_monitor.pipelines import PIPELINE_NAMES, get_pipeline
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one detection pipeline.")
     parser.add_argument("--pipeline", required=True,
-                        choices=sorted(PIPELINE_REGISTRY.keys()),
+                        choices=sorted(PIPELINE_NAMES),
                         help="Which pipeline to run.")
     parser.add_argument("--species", default="zebra",
                         help=f"Target species. One of: {', '.join(TARGET_SPECIES)}")
@@ -28,7 +28,7 @@ def main() -> None:
                         help="Number of images to process.")
     args = parser.parse_args()
 
-    pipeline = PIPELINE_REGISTRY[args.pipeline]()
+    pipeline = get_pipeline(args.pipeline)()
     pipeline.run(args.species, args.top_n)
 
 
