@@ -7,6 +7,7 @@ venv/
 # Data and model weights are large; keep them out of version control.
 data/images/
 models/*.pth
+models/behaviour/*.npz
 models/*.pt
 results/
 config.json
@@ -14,3 +15,6 @@ images/
 *.pt
 data/*
 image*
+# SQLite write-ahead log files
+*.db-wal
+*.db-shm

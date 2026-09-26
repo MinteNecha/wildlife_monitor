@@ -18,7 +18,20 @@ dependencies = [
     "open-clip-torch>=2.24",
     "segment-anything>=1.0",
     "ultralytics>=8.3.237",
+    "streamlit>=1.35",
+    "plotly>=5.20",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 include = ["wildlife_monitor*"]
+
+[tool.setuptools.package-data]
+"wildlife_monitor.db" = ["*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

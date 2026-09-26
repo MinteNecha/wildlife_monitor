@@ -24,3 +24,6 @@ plotly>=5.20
 folium>=0.16
 streamlit-folium>=0.20
 megadetector>=0.0.1   # Microsoft AI for Earth camera trap detector
+
+# Tests
+pytest>=8.0
