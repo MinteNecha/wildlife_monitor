@@ -256,14 +256,12 @@ def layernorm(x, gain, bias, eps=1e-5):
     normed = diff / std
     return normed * gain + bias
 
-
 def softmax_cross_entropy(logits, labels):
     num_classes = logits.data.shape[-1]
     one_hot = Tensor(np.eye(num_classes)[labels])
     probs = logits.softmax()
     selected = (probs * one_hot).sum_axis(axis=-1)
     return (-selected.log()).mean()
-
 
 class Adam:
     def __init__(self, params, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):

@@ -12,7 +12,7 @@ def init_weight(shape):
 
 class BehaviourModel(ABC):
     @abstractmethod
-    def forward(self, sequences: np.ndarray, lengths: np.ndarray, training: bool = True):
+    def forward(self, sequences: np.ndarray, lengths: np.ndarray, month_features: np.ndarray, training: bool = True):
         """Returns (activity_logits, movement_logits) as Tensors."""
 
     @abstractmethod
@@ -22,7 +22,7 @@ class BehaviourModel(ABC):
 
 class LSTMBehaviourModel(BehaviourModel):
     def __init__(self, num_features=5, hidden_size=128, num_layers=2, dropout=0.1,
-                 num_activity_classes=3, num_movement_classes=3):
+                 num_activity_classes=3, num_movement_classes=3, num_month_features=12):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout = dropout
@@ -43,7 +43,11 @@ class LSTMBehaviourModel(BehaviourModel):
 
         self.W_activity = init_weight((hidden_size, num_activity_classes))
         self.b_activity = Tensor(np.zeros(num_activity_classes))
-        self.W_movement = init_weight((hidden_size, num_movement_classes))
+        # Movement head also takes the per-camera monthly detection-share
+        # vector, computed from that camera's full (uncapped) season, so it
+        # sees the seasonal shape even for cameras whose raw sequence is
+        # truncated to max_length.
+        self.W_movement = init_weight((hidden_size + num_month_features, num_movement_classes))
         self.b_movement = Tensor(np.zeros(num_movement_classes))
 
     def parameters(self):
@@ -52,7 +56,7 @@ class LSTMBehaviourModel(BehaviourModel):
             params.extend(layer.values())
         return params
 
-    def forward(self, sequences, lengths, training=True):
+    def forward(self, sequences, lengths, month_features, training=True):
         batch, seq_len, _ = sequences.shape
         mask = (np.arange(seq_len)[None, :] < lengths[:, None]).astype(np.float64)
         keep_mask = 1.0 - mask
@@ -84,14 +88,15 @@ class LSTMBehaviourModel(BehaviourModel):
 
         final_hidden = layer_input[-1]
         activity_logits = final_hidden @ self.W_activity + self.b_activity
-        movement_logits = final_hidden @ self.W_movement + self.b_movement
+        movement_input = Tensor.concat([final_hidden, Tensor(month_features)], axis=-1)
+        movement_logits = movement_input @ self.W_movement + self.b_movement
         return activity_logits, movement_logits
 
 
 class TransformerBehaviourModel(BehaviourModel):
     def __init__(self, num_features=5, hidden_size=128, num_heads=4, num_layers=3,
                  max_length=30, ff_hidden=256, dropout=0.1, activation="relu",
-                 num_activity_classes=3, num_movement_classes=3):
+                 num_activity_classes=3, num_movement_classes=3, num_month_features=12):
         assert hidden_size % num_heads == 0
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -124,7 +129,11 @@ class TransformerBehaviourModel(BehaviourModel):
 
         self.W_activity = init_weight((hidden_size, num_activity_classes))
         self.b_activity = Tensor(np.zeros(num_activity_classes))
-        self.W_movement = init_weight((hidden_size, num_movement_classes))
+        # Movement head also takes the per-camera monthly detection-share
+        # vector, computed from that camera's full (uncapped) season, so it
+        # sees the seasonal shape even for cameras whose raw sequence is
+        # truncated to max_length.
+        self.W_movement = init_weight((hidden_size + num_month_features, num_movement_classes))
         self.b_movement = Tensor(np.zeros(num_movement_classes))
 
     def parameters(self):
@@ -135,7 +144,7 @@ class TransformerBehaviourModel(BehaviourModel):
                 params.extend(val) if isinstance(val, list) else params.append(val)
         return params
 
-    def forward(self, sequences, lengths, training=True):
+    def forward(self, sequences, lengths, month_features, training=True):
         batch, seq_len, _ = sequences.shape
         mask_1d = (np.arange(seq_len)[None, :] < lengths[:, None]).astype(np.float64)
         key_mask_bias = np.where(mask_1d[:, None, :] > 0, 0.0, -1e9)
@@ -172,5 +181,6 @@ class TransformerBehaviourModel(BehaviourModel):
         pooled = summed / lengths_t
 
         activity_logits = pooled @ self.W_activity + self.b_activity
-        movement_logits = pooled @ self.W_movement + self.b_movement
+        movement_input = Tensor.concat([pooled, Tensor(month_features)], axis=-1)
+        movement_logits = movement_input @ self.W_movement + self.b_movement
         return activity_logits, movement_logits

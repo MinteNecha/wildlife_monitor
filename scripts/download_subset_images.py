@@ -12,9 +12,8 @@ from tqdm import tqdm
 IMAGES_PER_SPECIES = 1500        # None = no cap, take every available image
 
 TARGET_SPECIES = [
-    "buffalo",
-    "lionfemale",
-    "gazellethomsons",
+    "zebra",
+    "wildebeest",
 ]        
 
 IMAGE_BASE_URL = (
@@ -32,8 +31,8 @@ IMAGE_DIR = Path("images_season2")
 DATA_DIR.mkdir(exist_ok=True)
 IMAGE_DIR.mkdir(exist_ok=True)
 
-JSON_PATH   = DATA_DIR / "SnapshotSerengetiS02.json"
-SUBSET_PATH = DATA_DIR / "subset_metadata_season2.csv"
+JSON_PATH   = DATA_DIR / "SnapshotSerengetiS01.json"
+SUBSET_PATH = DATA_DIR / "subset_metadata.csv"
 
 # ── Published GPS coordinates for Serengeti camera sites 
 CAMERA_GPS = {
