@@ -7,6 +7,11 @@ a small set of functions that return plain pandas frames. This keeps the
 UI code declarative and means a change to the on-disk format only has to
 be reflected in one module.
 
+Reads come from the SQLite database, which is the system of record. When the
+database has no rows for a species — results archived before the migration, or
+a fresh clone — the matching detections CSV is read instead, so the dashboard
+still shows whatever the user actually has.
+
 Correctness is derived, not stored: a detection is "correct" when the
 species it was run for matches the ground-truth ``species_label`` for that
 image in the subset metadata. This mirrors how the pipelines actually
@@ -16,13 +21,14 @@ work — they are run per species, so every record in
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
 
 from wildlife_monitor.config import RESULTS_DIR, SUBSET_CSV
 from wildlife_monitor.data import load_species_subset
-from wildlife_monitor.pipelines import PIPELINE_REGISTRY
+from wildlife_monitor.db import database_exists, load_detections as db_detections
 
 # Human-readable species names for display.
 PRETTY_NAMES = {
@@ -72,7 +78,16 @@ def load_subset() -> pd.DataFrame:
 
 
 def species_list() -> list[str]:
-    """Return the sorted list of species present in the subset."""
+    """Species available to the dashboard — from the database, else the subset."""
+    if database_exists():
+        try:
+            from wildlife_monitor.db import session, DetectionRepository
+            with session() as connection:
+                names = DetectionRepository(connection).species_with_detections()
+            if names:
+                return names
+        except Exception:
+            pass
     subset = load_subset()
     if subset.empty or "species_label" not in subset.columns:
         return []
@@ -84,19 +99,25 @@ def detections_path(pipeline: str, species: str) -> Path:
     return RESULTS_DIR / pipeline / f"detections_{species}.csv"
 
 
+def load_raw_detections(pipeline: str, species: str) -> pd.DataFrame:
+    """Detections from the database, falling back to the archived CSV."""
+    if database_exists():
+        frame = db_detections(species, pipeline)
+        if not frame.empty:
+            return frame
+    path = detections_path(pipeline, species)
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
 def load_detections(pipeline: str, species: str) -> pd.DataFrame:
     """Load one pipeline's detections for a species, with correctness added.
 
-    If the CSV already contains a ``correct`` column (written by the pipeline
-    itself via ground-truth lookup), that column is used directly. Otherwise
+    If the source already contains a ``correct`` column (written by the
+    pipeline via ground-truth lookup), that column is used directly. Otherwise
     correctness is derived by matching ``image_id`` against the subset
     metadata. Returns an empty frame when the pipeline has not been run.
     """
-    path = detections_path(pipeline, species)
-    if not path.exists():
-        return pd.DataFrame()
-
-    frame = pd.read_csv(path)
+    frame = load_raw_detections(pipeline, species)
     if frame.empty:
         return frame
 
@@ -126,7 +147,7 @@ def load_all_detections(species: str) -> dict[str, pd.DataFrame]:
     are omitted so callers can simply iterate over what is present.
     """
     result: dict[str, pd.DataFrame] = {}
-    for pipeline in PIPELINE_REGISTRY:
+    for pipeline in PIPELINE_DISPLAY:
         frame = load_detections(pipeline, species)
         if not frame.empty:
             result[pipeline] = frame
@@ -204,6 +225,77 @@ def evaluation_species_list() -> list[str]:
     if frame.empty or "true_species" not in frame.columns:
         return []
     return sorted(frame["true_species"].unique().tolist())
+
+
+# ── Behavioural analysis data access (Pipeline 2 / P3) ───────────────────────
+
+BEHAVIOUR_RESULTS_DIR = RESULTS_DIR / "behaviour"
+BEHAVIOUR_PIPELINE = "bioclip_megadetector"
+
+
+def behaviour_checkpoints() -> list[dict[str, str]]:
+    """Every trained behaviour model on disk, newest information first."""
+    from wildlife_monitor.pipeline2.inference import available_checkpoints
+    return available_checkpoints()
+
+
+def behaviour_architectures(species: str) -> list[str]:
+    """Architectures with a trained checkpoint for this species."""
+    return sorted({entry["architecture"] for entry in behaviour_checkpoints()
+                   if entry["species"] == species})
+
+
+def load_behaviour_metrics(species: str, architecture: str) -> dict:
+    """Training metadata and held-out metrics for one trained model."""
+    path = BEHAVIOUR_RESULTS_DIR / f"{species}_{architecture}_metrics.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def load_behaviour_service(species: str, architecture: str):
+    """Load the trained model for a species, or None when it is absent."""
+    from wildlife_monitor.pipeline2.inference import BehaviourService
+    try:
+        return BehaviourService.load(species, architecture)
+    except (FileNotFoundError, ValueError, KeyError):
+        return None
+
+
+def behaviour_detections(species: str) -> pd.DataFrame:
+    """The detections frame Pipeline 2 is trained and served on."""
+    return load_raw_detections(BEHAVIOUR_PIPELINE, species)
+
+
+def stored_patterns(species: str, model_version: str | None = None) -> pd.DataFrame:
+    """Behaviour patterns persisted by the last training run."""
+    if not database_exists():
+        return pd.DataFrame()
+    try:
+        from wildlife_monitor.db import session
+        from wildlife_monitor.db.repository import BehaviourPatternRepository
+        with session() as connection:
+            return BehaviourPatternRepository(connection).frame(
+                species, model_version)
+    except Exception:
+        return pd.DataFrame()
+
+
+def monthly_profile(detections: pd.DataFrame, camera_id: str) -> pd.DataFrame:
+    """Monthly share of one camera's detections — what the model reads."""
+    from wildlife_monitor.pipeline2.labelling import compute_monthly_distribution
+    distribution = compute_monthly_distribution(detections)
+    shares = distribution.get(camera_id)
+    if shares is None:
+        return pd.DataFrame()
+    return pd.DataFrame({
+        "month": ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        "share": [float(value) for value in shares],
+    })
 
 
 def per_species_accuracy(frame: pd.DataFrame) -> pd.DataFrame:

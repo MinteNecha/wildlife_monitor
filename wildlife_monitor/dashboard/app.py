@@ -17,13 +17,14 @@ import streamlit as st
 from wildlife_monitor.dashboard import data_access as da
 from wildlife_monitor.dashboard.theme import inject_css, BLACK, GREY, CARD_BORDER
 from wildlife_monitor.dashboard.views import (
-    overview, upload, detection, detection_map, comparison,
+    overview, upload, detection, detection_map, behaviour, comparison,
     review, settings, export,
 )
 
 _PAGES = [
     "Overview", "Upload", "Species Detection", "Detection Map",
-    "Pipeline Comparison", "Image Review", "Settings", "Export",
+    "Behavioural Analysis", "Pipeline Comparison", "Image Review",
+    "Settings", "Export",
 ]
 
 
@@ -44,7 +45,7 @@ def _sidebar() -> tuple[str, str, str]:
             f"<div style='font-size:14px;font-weight:700;color:{BLACK}'>"
             f"Serengeti Monitor</div>"
             f"<div style='font-size:11px;color:{GREY};margin-top:3px'>"
-            f"Pipeline 1 · Camera Trap Analysis</div></div>",
+            f"Camera Trap Analysis · P1 + P2</div></div>",
             unsafe_allow_html=True)
 
         page = st.radio("Navigation", _PAGES, label_visibility="collapsed")
@@ -82,6 +83,8 @@ def _route(page: str, species: str, pipeline: str) -> None:
         detection.render(species, pipeline)
     elif page == "Detection Map":
         detection_map.render(species, pipeline)
+    elif page == "Behavioural Analysis":
+        behaviour.render(species)
     elif page == "Pipeline Comparison":
         comparison.render(species)
     elif page == "Image Review":
