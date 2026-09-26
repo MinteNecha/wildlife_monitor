@@ -18,7 +18,20 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
-import torch
+
+def default_device() -> str:
+    """Best available compute device, without requiring torch to be installed.
+
+    Pipeline 2 runs on the project's own NumPy autodiff engine and has no
+    torch dependency. Importing torch at module scope would make the whole
+    configuration package — and therefore the dashboard — unimportable in an
+    environment that only needs the behavioural models.
+    """
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ── Project directory layout ──────────────────────────────────────────────────
@@ -107,9 +120,7 @@ class SystemConfig:
     construct it directly in application code.
     """
 
-    device: str = field(default_factory=lambda: (
-        "cuda" if torch.cuda.is_available() else "cpu"
-    ))
+    device: str = field(default_factory=default_device)
     confidence_threshold: float = 0.0
     top_n: int = DEFAULT_TOP_N
 
@@ -132,8 +143,7 @@ class SystemConfig:
             try:
                 data = json.loads(config_file.read_text())
                 return cls(
-                    device=data.get("device",
-                                    "cuda" if torch.cuda.is_available() else "cpu"),
+                    device=data.get("device", default_device()),
                     confidence_threshold=data.get("confidence_threshold", 0.0),
                     top_n=data.get("top_n", DEFAULT_TOP_N),
                 )

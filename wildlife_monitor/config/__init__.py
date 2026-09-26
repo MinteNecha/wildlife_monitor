@@ -7,8 +7,9 @@ from wildlife_monitor.config.settings import (
     YOLO_MODEL, PROMPT_TEMPLATE, SAM_CROSS_OFFSET, SAM3_CONF,
     ANIMAL_COCO_IDS, DEFAULT_TOP_N, TARGET_SPECIES,
     MEGADETECTOR_CONF,
-    SystemConfig, ensure_directories,
+    SystemConfig, ensure_directories, default_device,
 )
+from wildlife_monitor.config.validator import ConfigValidator
 
 __all__ = [
     "PROJECT_ROOT", "DATA_DIR", "MODELS_DIR", "RESULTS_DIR",
@@ -17,5 +18,6 @@ __all__ = [
     "YOLO_MODEL", "PROMPT_TEMPLATE", "SAM_CROSS_OFFSET", "SAM3_CONF",
     "ANIMAL_COCO_IDS", "DEFAULT_TOP_N", "TARGET_SPECIES",
     "MEGADETECTOR_CONF",
-    "SystemConfig", "ensure_directories",
+    "SystemConfig", "ensure_directories", "default_device",
+    "ConfigValidator",
 ]
