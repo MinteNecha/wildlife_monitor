@@ -12,6 +12,12 @@ database has no rows for a species — results archived before the migration, or
 a fresh clone — the matching detections CSV is read instead, so the dashboard
 still shows whatever the user actually has.
 
+Verification is tri-state. A detection is "correct" or "incorrect" only when
+a ground-truth label exists for that image; otherwise it is "unverified".
+Collapsing unverified into incorrect would report a dashboard full of 0%
+accuracy to any user whose images are not pre-labelled, which is every user
+outside the Snapshot Serengeti dataset this system was developed against.
+
 Correctness is derived, not stored: a detection is "correct" when the
 species it was run for matches the ground-truth ``species_label`` for that
 image in the subset metadata. This mirrors how the pipelines actually
@@ -58,6 +64,28 @@ PIPELINE_DISPLAY = {
 
 # Values in the ``location`` column that mean "nothing was localised".
 _EMPTY_LOCATIONS = {"no_mask", "no_detection", ""}
+
+# Confidence bands used throughout the dashboard. Detections in the lowest
+# band are the ones worth a human's attention: without ground truth you cannot
+# know which predictions are wrong, but you always know which are uncertain.
+CONFIDENCE_BANDS = [
+    ("high", 0.75, "Confident"),
+    ("medium", 0.50, "Uncertain"),
+    ("low", 0.00, "Needs review"),
+]
+
+
+def confidence_band(value: float) -> str:
+    """Band name for one confidence score."""
+    for name, floor, _ in CONFIDENCE_BANDS:
+        if float(value) >= floor:
+            return name
+    return "low"
+
+
+def band_label(name: str) -> str:
+    """Human-readable label for a confidence band."""
+    return next((label for key, _, label in CONFIDENCE_BANDS if key == name), name)
 
 
 def pretty(species: str) -> str:
@@ -123,21 +151,62 @@ def load_detections(pipeline: str, species: str) -> pd.DataFrame:
 
     # Use the stored correct column if available (new pipeline output)
     if "correct" in frame.columns:
-        frame["correct"] = frame["correct"].map(
-            lambda v: True if str(v).lower() == "correct"
-            else False if str(v).lower() == "incorrect"
-            else False
-        )
+        frame["verification"] = frame["correct"].map(
+            lambda v: str(v).lower()
+            if str(v).lower() in ("correct", "incorrect") else "unverified")
     else:
-        # Derive from ground truth (legacy CSVs without the column)
+        # Derive from ground truth (legacy sources without the column)
         ground_truth = _ground_truth_lookup(species)
-        frame["correct"] = frame["image_id"].map(ground_truth).eq(species)
+        labels = frame["image_id"].map(ground_truth)
+        frame["verification"] = labels.map(
+            lambda label: "unverified" if pd.isna(label)
+            else "correct" if label == species else "incorrect")
+
+    # Kept as a convenience for callers that only care about confirmed hits.
+    # Never true for unverified detections, and never false either — check
+    # ``verification`` when the distinction matters.
+    frame["correct"] = frame["verification"].eq("correct")
+
+    if "confidence" in frame.columns:
+        frame["band"] = frame["confidence"].map(confidence_band)
 
     if "location" in frame.columns:
         frame["localised"] = ~frame["location"].isin(_EMPTY_LOCATIONS)
     else:
         frame["localised"] = False
     return frame
+
+
+def has_ground_truth(frame: pd.DataFrame) -> bool:
+    """True when at least one detection in this frame carries a known label."""
+    if frame.empty or "verification" not in frame.columns:
+        return False
+    return bool((frame["verification"] != "unverified").any())
+
+
+def verification_counts(frame: pd.DataFrame) -> dict[str, int]:
+    """How many detections are correct, incorrect and unverified."""
+    if frame.empty or "verification" not in frame.columns:
+        return {"correct": 0, "incorrect": 0, "unverified": 0}
+    counts = frame["verification"].value_counts().to_dict()
+    return {key: int(counts.get(key, 0))
+            for key in ("correct", "incorrect", "unverified")}
+
+
+def accuracy_of(frame: pd.DataFrame) -> float | None:
+    """Accuracy over verified detections only, or None when none are verified."""
+    if frame.empty or "verification" not in frame.columns:
+        return None
+    verified = frame[frame["verification"] != "unverified"]
+    if verified.empty:
+        return None
+    return float(verified["verification"].eq("correct").mean() * 100)
+
+
+def sufficiency(species: str) -> "object":
+    """Assess what the detections for a species can honestly support."""
+    from wildlife_monitor.data.sufficiency import assess
+    return assess(behaviour_detections(species))
 
 
 def load_all_detections(species: str) -> dict[str, pd.DataFrame]:
