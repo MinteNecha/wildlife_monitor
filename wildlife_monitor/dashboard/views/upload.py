@@ -1,16 +1,24 @@
 """
-Upload page (UC1, FR1) — camera setup, validation, and ingestion.
+Upload page (UC1, FR1) — camera setup, capture times, validation, ingestion.
 
-Three steps, in the order a user actually needs them:
+Four steps, in the order a user actually needs them:
 
     1. say which camera these photographs came from, and where it is
-    2. upload the photographs and see what passed
-    3. ingest them
+    2. optionally supply capture times, if the photographs have lost theirs
+    3. upload the photographs and see what passed
+    4. ingest them
 
 Step 1 exists because a browser upload carries no folder, so the camera has
 to be stated. It is filled in on the page rather than in a spreadsheet, and
 the system writes the file, which removes any chance of getting the format
 wrong. A file prepared elsewhere can be uploaded instead.
+
+Step 2 exists because EXIF is routinely stripped — by editing software, by
+messaging apps, by anything that re-saves a JPEG — and a photograph with no
+capture time contributes nothing to behavioural analysis. A metadata CSV or an
+annotation JSON puts the times back. The coverage figures below are computed
+from the resolved times, not from EXIF alone, so the span shown is the span
+that will actually be analysed.
 
 Where images fail the resolution check the page offers three honest choices
 rather than one silent fix: replace them, lower the requirement, or let the
@@ -20,11 +28,12 @@ no detail and every enlarged image is flagged in the database afterwards.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
-from wildlife_monitor.dashboard import data_access as da
 from wildlife_monitor.dashboard.components import header, rule, note
 from wildlife_monitor.dashboard.theme import BLACK, GREY
 from wildlife_monitor.data.cameras import (
@@ -33,6 +42,10 @@ from wildlife_monitor.data.cameras import (
 from wildlife_monitor.data.ingestion import ImageIngestor
 from wildlife_monitor.data.preparation import ImagePreparer, describe_options
 from wildlife_monitor.data.sufficiency import MIN_SPAN_MONTHS
+from wildlife_monitor.data import timestamps
+from wildlife_monitor.data.timestamps import (
+    AnnotationFile, MetadataFile, TimestampResolver,
+)
 from wildlife_monitor.data.validator import ImageValidator
 from wildlife_monitor.db import init_db
 from wildlife_monitor.pipeline2.feature_extractor import HABITAT_CLASSES
@@ -47,11 +60,14 @@ def render(species: str) -> None:
     camera_id, registry = _camera_step()
     rule()
 
+    sources = _timestamp_step()
+    rule()
+
     min_width = int(st.session_state.get("min_width", 640))
     min_height = int(st.session_state.get("min_height", 480))
     validator = ImageValidator(min_width=min_width, min_height=min_height)
 
-    st.subheader("2 · Photographs")
+    st.subheader("3 · Photographs")
     st.caption(validator.requirements)
     files = st.file_uploader("Camera trap images",
                              type=["jpg", "jpeg", "png", "tif", "tiff", "webp"],
@@ -61,11 +77,21 @@ def render(species: str) -> None:
         return
 
     accepted, rejected = validator.validate_batch(files)
-    _summary_metrics(files, accepted, rejected)
+
+    # A separate resolver for the preview, so the counts it accumulates are
+    # not carried into the ingestion run's own report.
+    preview = _build_resolver(sources, validator)
+    resolved = {getattr(file, "name", ""):
+                preview.resolve(getattr(file, "name", ""), camera_id, file)
+                for file in files}
+    for file in files:
+        file.seek(0)
+
+    _summary_metrics(files, accepted, rejected, resolved)
     rule()
-    _coverage_summary(accepted)
+    _coverage_summary(accepted, resolved, preview)
     rule()
-    _results_tables(accepted, rejected)
+    _results_tables(accepted, rejected, resolved)
 
     preparer = None
     if rejected:
@@ -73,7 +99,7 @@ def render(species: str) -> None:
         preparer = _recovery_options(rejected, min_width, min_height)
 
     rule()
-    _ingest_step(files, camera_id, registry, validator, preparer)
+    _ingest_step(files, camera_id, registry, validator, preparer, sources)
 
 
 # ── Step 1: the camera ───────────────────────────────────────────────────────
@@ -195,10 +221,117 @@ def _upload_registry(registry: CameraRegistry) -> tuple[str, CameraRegistry]:
     return camera_id, loaded
 
 
-# ── Step 2: validation feedback ──────────────────────────────────────────────
+# ── Step 2: capture times ────────────────────────────────────────────────────
 
-def _summary_metrics(files, accepted, rejected) -> None:
-    missing = sum(not result.details.get("has_timestamp") for result in accepted)
+@dataclass
+class _Sources:
+    """The optional timestamp files this upload will use."""
+
+    annotations: AnnotationFile | None = None
+    metadata: MetadataFile | None = None
+    accept_date_only: bool = False
+
+
+def _build_resolver(sources: _Sources,
+                    validator: ImageValidator) -> TimestampResolver:
+    """A fresh resolver over the same loaded files.
+
+    Each resolver keeps its own tally of which source answered, so the preview
+    pass and the ingestion run get separate instances and neither inflates the
+    other's report. Parsing is not repeated: the loaded files are shared.
+    """
+    return TimestampResolver(annotations=sources.annotations,
+                             metadata=sources.metadata,
+                             validator=validator,
+                             accept_date_only=sources.accept_date_only)
+
+
+def _cached(upload, key: str, loader):
+    """Parse an uploaded file once per upload, not once per interaction.
+
+    Streamlit re-runs this script on every widget change. An annotation file
+    can be hundreds of megabytes, so re-parsing it each time would make the
+    page unusable; the parsed result is kept against the file's name and size.
+    """
+    if upload is None:
+        st.session_state.pop(key, None)
+        return None
+    stamp = (getattr(upload, "name", ""), getattr(upload, "size", 0))
+    cached = st.session_state.get(key)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    with st.spinner(f"Reading {stamp[0]}…"):
+        loaded = loader(upload)
+    st.session_state[key] = (stamp, loaded)
+    return loaded
+
+
+def _timestamp_step() -> _Sources:
+    """Offer the ways to supply capture times the photographs have lost."""
+    st.subheader("2 · Capture Times")
+    st.caption("Optional. Capture times are read from the photographs' own "
+               "EXIF data, and from their file names where those carry a date "
+               "and time. Supply a file here if yours have neither — EXIF is "
+               "routinely stripped by editing and messaging software.")
+
+    sources = _Sources()
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("**Metadata CSV**")
+        st.caption("Columns: filename, timestamp. A camera column is used "
+                   "where file names repeat across sites, and a species "
+                   "column is stored as ground truth.")
+        upload = st.file_uploader("Metadata CSV", type=["csv"],
+                                  key="timestamp_csv",
+                                  label_visibility="collapsed")
+        sources.metadata = _cached(upload, "_metadata_file", MetadataFile.load)
+        if sources.metadata is not None:
+            _source_note(sources.metadata.report)
+
+    with right:
+        st.markdown("**Annotation JSON**")
+        st.caption("A COCO Camera Traps file such as "
+                   "SnapshotSerengetiS01.json. Takes precedence over "
+                   "everything else, and its species labels are stored as "
+                   "ground truth.")
+        upload = st.file_uploader("Annotation JSON", type=["json"],
+                                  key="timestamp_json",
+                                  label_visibility="collapsed")
+        sources.annotations = _cached(upload, "_annotation_file",
+                                       AnnotationFile.load)
+        if sources.annotations is not None:
+            _source_note(sources.annotations.report)
+
+    sources.accept_date_only = st.checkbox(
+        "Accept a date with no time of day from the file name",
+        value=False,
+        help="A name like 20240315.jpg gives a real month but no hour, so it "
+             "is recorded at midnight. Seasonal and movement results stay "
+             "valid; day/night activity timing does not.")
+
+    st.caption(_build_resolver(sources, ImageValidator()).describe_chain()
+               + "  File modification time is never used: copying a folder "
+                 "resets it, so it is always present and almost always wrong.")
+    return sources
+
+
+def _source_note(report) -> None:
+    """Say what a supplied file loaded, and what went wrong if anything did."""
+    note(report.summary_line(), ok=report.usable)
+    for problem in report.problems:
+        st.caption(f"· {problem}")
+
+
+# ── Step 3: validation feedback ──────────────────────────────────────────────
+
+def _has_time(resolved: dict, file) -> bool:
+    resolution = resolved.get(getattr(file, "name", ""))
+    return bool(resolution is not None and resolution.found)
+
+
+def _summary_metrics(files, accepted, rejected, resolved) -> None:
+    missing = sum(1 for file in files if not _has_time(resolved, file))
     for column, (label, value) in zip(st.columns(4), [
         ("Received", len(files)), ("Accepted", len(accepted)),
         ("Rejected", len(rejected)), ("No Timestamp", missing),
@@ -206,20 +339,31 @@ def _summary_metrics(files, accepted, rejected) -> None:
         column.metric(label, value)
 
 
-def _coverage_summary(accepted) -> None:
+def _coverage_summary(accepted, resolved, resolver) -> None:
     """Date range covered, and what that span can support.
 
     Time span is the constraint most likely to invalidate a behavioural
-    result, and it is knowable from EXIF before any detection has run.
+    result, and it is knowable before any detection has run. The span is
+    computed from the resolved times rather than from EXIF alone, so a user
+    who supplied a metadata file sees the coverage they will actually get.
     """
     st.subheader("Coverage")
-    stamps = sorted(result.details.get("timestamp", "") for result in accepted
-                    if result.details.get("has_timestamp"))
+    names = {result.details.get("name", "") for result in accepted}
+    stamps = sorted(resolution.text for name, resolution in resolved.items()
+                    if name in names and resolution.found)
+
+    found = [(source, count) for source, count in resolver.breakdown()
+             if source != timestamps.NONE]
+    if found:
+        st.caption(" · ".join(f"{count:,} from {source}"
+                              for source, count in found))
 
     if not stamps:
-        note("None of these images carry an EXIF capture time. Without "
-             "timestamps the system cannot order detections, so they can be "
-             "classified but not used for behavioural analysis.", ok=False)
+        note("None of these images has a capture time, from EXIF, their file "
+             "names or any file you supplied. Without timestamps the system "
+             "cannot order detections, so they can be classified but not used "
+             "for behavioural analysis. A metadata CSV in step 2 would "
+             "recover them.", ok=False)
         return
 
     first, last = stamps[0][:10], stamps[-1][:10]
@@ -248,18 +392,26 @@ def _coverage_summary(accepted) -> None:
              f"not change this — more months will.", ok=False)
 
 
-def _results_tables(accepted, rejected) -> None:
+def _results_tables(accepted, rejected, resolved) -> None:
     left, right = st.columns([3, 2])
     with left:
         st.subheader("Accepted Files")
         if accepted:
-            st.dataframe(pd.DataFrame([{
-                "File": result.details.get("name", ""),
-                "Format": result.details.get("format", ""),
-                "Resolution": result.details.get("resolution", ""),
-                "Timestamp": result.details.get("timestamp") or "not in EXIF",
-            } for result in accepted]), width="stretch", height=240,
-                hide_index=True)
+            rows = []
+            for result in accepted:
+                name = result.details.get("name", "")
+                resolution = resolved.get(name)
+                rows.append({
+                    "File": name,
+                    "Format": result.details.get("format", ""),
+                    "Resolution": result.details.get("resolution", ""),
+                    "Timestamp": (resolution.text if resolution
+                                  and resolution.found else "none found"),
+                    "From": (resolution.source if resolution
+                             and resolution.found else "—"),
+                })
+            st.dataframe(pd.DataFrame(rows), width="stretch", height=240,
+                         hide_index=True)
         else:
             st.warning("No files passed validation.")
     with right:
@@ -326,12 +478,13 @@ def _recovery_options(rejected, min_width: int,
     return None
 
 
-# ── Step 3: ingestion ────────────────────────────────────────────────────────
+# ── Step 4: ingestion ────────────────────────────────────────────────────────
 
 def _ingest_step(files, camera_id: str, registry: CameraRegistry,
                  validator: ImageValidator,
-                 preparer: ImagePreparer | None) -> None:
-    st.subheader("3 · Ingest")
+                 preparer: ImagePreparer | None,
+                 sources: _Sources) -> None:
+    st.subheader("4 · Ingest")
 
     if not camera_id:
         st.info("Choose or add a camera in step 1 before ingesting.")
@@ -348,20 +501,28 @@ def _ingest_step(files, camera_id: str, registry: CameraRegistry,
         init_db()
         for file in files:
             file.seek(0)
-        report = ImageIngestor(validator, preparer).ingest_uploads(
-            files, camera_id, registry)
+        ingestor = ImageIngestor(
+            validator, preparer,
+            resolver=_build_resolver(sources, validator))
+        report = ingestor.ingest_uploads(files, camera_id, registry)
     except Exception as error:
         st.error(f"Ingestion failed: {error}")
         return
 
     st.success(report.summary_line())
+    if report.timestamp_sources:
+        st.caption(report.timestamp_line())
+    if report.labelled:
+        note(f"{report.labelled} image(s) carry a species label from the file "
+             f"you supplied. These are stored as ground truth, so Image Review "
+             f"will report measured accuracy for them instead of showing them "
+             f"as unverified.", ok=True)
     if report.upscaled:
         note(f"{report.upscaled} image(s) were enlarged and are flagged as "
              f"such. Their detections will be no better than at the original "
              f"size.", ok=False)
-    if report.undated:
-        note(f"{report.undated} image(s) had no capture time and cannot be "
-             f"used for behavioural analysis.", ok=False)
+    for message in report.timestamp_notes:
+        note(message, ok=False)
     if report.rejected:
         for name, reason in report.rejected[:5]:
             note(f"<b>{name}</b><br>{reason}", ok=False)

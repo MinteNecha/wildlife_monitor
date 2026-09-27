@@ -48,7 +48,11 @@ def _sidebar() -> tuple[str, str, str]:
             f"Camera Trap Analysis · P1 + P2</div></div>",
             unsafe_allow_html=True)
 
-        page = st.radio("Navigation", _PAGES, label_visibility="collapsed")
+        # Keyed so the selected page is addressable in session state — which
+        # is what lets a headless test open a specific page rather than
+        # silently re-rendering the first one.
+        page = st.radio("Navigation", _PAGES, key="page",
+                        label_visibility="collapsed")
 
         st.markdown(
             f"<div style='font-size:10px;font-weight:600;text-transform:uppercase;"
