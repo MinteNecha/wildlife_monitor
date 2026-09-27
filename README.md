@@ -170,15 +170,49 @@ classification. Thirty cameras over six months can.
 Activity timing (day/night) and social structure (group size) need no
 particular time span and work on much less data.
 
-### What an external user supplies
+### Using your own photographs
 
-1. Images in one folder per camera site
-2. A four-column `cameras.csv` — `camera_id, latitude, longitude, habitat_type`
-3. Optionally a species shortlist; otherwise the default 13 are used
+No species labels are needed. Put the images in one folder per camera and run:
 
-Capture times are read from EXIF. No species labels are required — and where
-none exist, detections are shown as **unverified** rather than counted wrong,
-with model confidence as the available signal.
+```bash
+# 1. write a camera file, pre-filled with the folders that were found
+python scripts/ingest_images.py --images photos/ --make-cameras
+
+# 2. fill in latitude, longitude and habitat_type, then ingest
+python scripts/ingest_images.py --images photos/ --cameras data/cameras.csv
+
+# 3. identify the species — no labels required
+python scripts/classify_images.py --all
+
+# 4. learn behaviour, then open the dashboard
+python scripts/train_behaviour.py --all --model lstm
+streamlit run wildlife_monitor/dashboard/app.py
+```
+
+Capture times come from EXIF. The Upload page does the same thing through the
+browser, one camera at a time, and writes the camera file for you.
+
+**Classification modes.** `--all` identifies among every configured species.
+`--species zebra` looks for one you already know. `--species zebra,wildebeest`
+chooses between a shortlist — fewer candidates means fewer things to confuse,
+so a shortlist usually classifies better than the full list.
+
+**Why an animal detector runs first.** BioCLIP scores an image against a closed
+candidate list and returns the nearest match for *anything*, including an empty
+frame, and confidence does not reliably flag it. MegaDetector answers a
+different question — is there an animal here at all — so empty triggers are
+dropped before they can become confident species records. Disable it with
+`--no-gate` only if you know every frame contains an animal.
+
+**Images that fail validation** get three honest options rather than one silent
+fix: replace them, lower the resolution requirement, or let the system enlarge
+them. Enlarging is offered but labelled for what it is — it adds no detail, so
+detection is no better, and every enlarged image is flagged in the database so
+its results stay identifiable. Format conversion, EXIF rotation and shrinking
+oversized images lose nothing and are safe to enable.
+
+Detections from unlabelled photographs are shown as **unverified** rather than
+counted wrong, with model confidence as the available signal.
 
 ## Known limitations
 

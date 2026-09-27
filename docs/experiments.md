@@ -227,7 +227,42 @@ ground truth, through the `PatternValidator` verdict loop.
 
 ---
 
-## 9. Interpreting the accuracy figures
+## 9. Two decisions in the external-user path
+
+**Enlarging images is offered, and labelled as cosmetic.** A user whose photos
+fall below the resolution threshold can replace them, lower the threshold, or
+have the system enlarge them. Enlargement is the one option that cannot
+improve a result: interpolating a 320x240 frame to 640x480 invents pixels and
+recovers no detail, and §6.5 of the design document already establishes that
+"stripes and rosettes are exactly what gets lost at low resolution". The image
+passes the check and performs exactly as badly as before.
+
+It is offered anyway, because a flagged result may be more useful to a user
+than no result. What makes that defensible is that the flag is durable: the
+`Image` table carries an `upscaled` column, it is surfaced in the flat
+detection view, and the ingestion report states how many images were enlarged
+and that detection on them will be no better. Format conversion, EXIF rotation
+and downscaling are offered separately and without caveat, because they lose
+nothing.
+
+**Classification is gated by an animal detector.** BioCLIP scores an image
+against a closed candidate list and returns the nearest species. Shown a bird,
+a vehicle, or waving grass — the last being most of what a camera trap
+actually records — it returns a mammal, confidently. §6.5 already found that
+"a confidence threshold alone cannot be used to filter out bad predictions
+because the bad ones are not necessarily low-confidence", so post-hoc
+filtering cannot fix this.
+
+MegaDetector answers an independent question: is there an animal in this frame
+at all. Running it first means empty frames never reach the recogniser. The
+test suite pins both halves of this — that the recogniser is never called on
+an empty frame with the gate on, and that the same frames become confident
+species records with it off — so the guard cannot be removed without a test
+failing.
+
+---
+
+## 10. Interpreting the accuracy figures
 
 Two caveats apply to every number in this document.
 
