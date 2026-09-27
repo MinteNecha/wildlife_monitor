@@ -162,7 +162,72 @@ measured reason to expect it to help.
 
 ---
 
-## 7. Interpreting the accuracy figures
+## 7. Movement labels are relative, not absolute — and degrade silently
+
+`classify_movement` compares each camera against `quantile(0.75)` of the other
+cameras. It never asks whether a camera is seasonally concentrated in absolute
+terms, only whether it ranks in the top quartile **of this deployment**.
+
+Two consequences follow, and both were measured rather than assumed.
+
+**A short deployment labels everything migratory.** With one month of data
+every camera has 100% of its detections in one month, so the 75th-percentile
+threshold lands on top of all of them and the `>=` comparison catches every
+camera:
+
+| Deployment | Cameras | Result |
+|---|---|---|
+| 1 month | 6 | 100% migratory |
+| 1 month | 30 | 100% migratory |
+| 1 month | 120 | 100% migratory |
+| 12 months | 4 | 100% migratory (too few cameras for a quartile) |
+| 12 months | 30 | 27% migratory / 33% territorial / 40% nomadic |
+
+Note that **more cameras does not fix a short deployment, and more images
+never does**. The binding constraint is months of coverage.
+
+**The class proportions are partly imposed by the rule.** Because the
+thresholds are quartiles, roughly 25% of cameras are territorial and up to 25%
+migratory almost regardless of the animals. The real data does vary (zebra
+12%, buffalo 22%, wildebeest 26%), but that variation comes mostly from how
+many cameras fall below the three-detection floor rather than from ecology.
+
+**Mitigation.** `wildlife_monitor/data/sufficiency.py` assesses coverage before
+any behavioural claim is displayed and states, in plain language, which
+outputs the data supports. The Behavioural Analysis page refuses to present
+movement results as dependable when the assessment says they are not, and the
+Upload page warns about a short span from EXIF timestamps alone — before any
+detection has been run. This does not fix the rule; it stops the rule being
+believed on data that cannot support it.
+
+---
+
+## 8. Correctness display replaced by confidence
+
+The original Image Review page split detections into "correct" and "incorrect"
+grids against the citizen-science labels. That only works on Snapshot
+Serengeti, which ships a label for every image. A user with their own camera
+trap photographs has no labels — that is why they are running a classifier —
+so the split would be empty.
+
+Worse, the dashboard mapped unknown ground truth to `False`, so unlabelled
+data displayed as **0% accurate** rather than unverified.
+
+Verification is now tri-state (`correct` / `incorrect` / `unverified`) and
+accuracy is computed over labelled detections only. On a mixed test set of
+1,462 detections of which 932 carry labels, the reported accuracy moved from
+45.4% (664 of all 1,462, counting unlabelled as wrong) to 71.2% (664 of the
+932 labelled) — the second figure being the only defensible one.
+
+Review is now organised by model confidence, defaulting to the lowest band.
+Without ground truth you cannot know which predictions are wrong, but you
+always know which the model was unsure about, and those are where a
+reviewer's attention belongs. The ecologist's review is then what creates
+ground truth, through the `PatternValidator` verdict loop.
+
+---
+
+## 9. Interpreting the accuracy figures
 
 Two caveats apply to every number in this document.
 
