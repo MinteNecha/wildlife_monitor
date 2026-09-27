@@ -36,19 +36,35 @@ def render(species: str) -> None:
 
 
 def _metric_row(species, subset, combined, all_detections) -> None:
-    accuracy = (f"{combined['correct'].mean() * 100:.1f}%"
-                if not combined.empty else "—")
     sites = (subset["site_id"].nunique()
              if "site_id" in subset.columns else "—")
+    accuracy = da.accuracy_of(combined) if not combined.empty else None
+    confidence = (f"{combined['confidence'].mean() * 100:.1f}%"
+                  if not combined.empty else "—")
+
     columns = st.columns(5)
     for column, (label, value) in zip(columns, [
         ("Total Images", f"{len(subset):,}"),
         ("Species", subset["species_label"].nunique()),
-        (f"Accuracy ({da.pretty(species)})", accuracy),
+        (f"Mean Confidence ({da.pretty(species)})", confidence),
         ("Camera Sites", sites),
         ("Pipelines Run", len(all_detections)),
     ]):
         column.metric(label, value)
+
+    # Accuracy is only meaningful against ground-truth labels, which most
+    # deployments will not have. Report it as a note where it exists rather
+    # than as a headline metric that reads as zero when it does not.
+    if accuracy is not None:
+        verification = da.verification_counts(combined)
+        labelled = verification["correct"] + verification["incorrect"]
+        st.caption(f"Against citizen-science labels: {accuracy:.1f}% of the "
+                   f"{labelled:,} labelled detections match the predicted "
+                   f"species. {verification['unverified']:,} detections are "
+                   f"unverified.")
+    elif not combined.empty:
+        st.caption("These detections carry no ground-truth labels, so accuracy "
+                   "cannot be computed. Confidence is the available signal.")
 
 
 def _accuracy_and_distribution(subset, combined) -> None:
@@ -92,18 +108,32 @@ def _accuracy_and_distribution(subset, combined) -> None:
 
 
 def _confidence_distribution(combined) -> None:
+    """Confidence spread, split by verification only where labels exist."""
     st.subheader("Confidence Score Distribution")
     figure = go.Figure()
-    for correct, label, colour in [(True, "Correct", POS_BAR),
-                                   (False, "Incorrect", NEG_BAR)]:
+
+    if da.has_ground_truth(combined):
+        for state, label, colour in [("correct", "Matches label", POS_BAR),
+                                      ("incorrect", "Differs from label", NEG_BAR)]:
+            values = combined.loc[combined["verification"] == state, "confidence"]
+            if not values.empty:
+                figure.add_trace(go.Histogram(
+                    x=values, name=label, nbinsx=25,
+                    marker_color=colour, opacity=0.80))
+        caption = ("Where the two overlap, the model is equally confident "
+                   "whether or not it agrees with the label — a sign of "
+                   "overconfidence.")
+    else:
         figure.add_trace(go.Histogram(
-            x=combined.loc[combined["correct"] == correct, "confidence"],
-            name=label, nbinsx=25, marker_color=colour, opacity=0.80))
+            x=combined["confidence"], name="Detections", nbinsx=25,
+            marker_color=POS_BAR, opacity=0.85))
+        caption = ("A long left tail means many low-confidence detections, "
+                   "which are the ones worth reviewing by eye.")
+
     figure.update_layout(
         **PLOT, height=220, barmode="overlay",
         legend=dict(font=dict(size=11, color=BLACK), bgcolor=WHITE),
         xaxis=dict(title="Confidence Score", **GRID),
         yaxis=dict(title="Count", **GRID))
     st.plotly_chart(figure, width="stretch")
-    st.caption("Overlapping bars indicate overconfidence — high confidence "
-               "appears on both correct and incorrect detections.")
+    st.caption(caption)

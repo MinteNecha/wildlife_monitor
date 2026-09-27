@@ -14,7 +14,7 @@ from wildlife_monitor.dashboard.components import (
 def render(species: str, pipeline: str) -> None:
     display = da.PIPELINE_DISPLAY.get(pipeline, {}).get("label", pipeline)
     header(f"Species Detection — {da.pretty(species)}",
-           f"{display} detections against citizen-scientist labels · UC2")
+           f"{display} detections, ranked by model confidence · UC2")
 
     frame = da.load_detections(pipeline, species)
     if frame.empty:
@@ -39,28 +39,43 @@ def render(species: str, pipeline: str) -> None:
 
 
 def _metrics(frame: pd.DataFrame) -> None:
-    accuracy = frame["correct"].mean() * 100
+    """Confidence-led metrics. Accuracy appears only where labels exist."""
     localised = int(frame["localised"].sum())
+    needs_review = int((frame["band"] == "low").sum())
+    accuracy = da.accuracy_of(frame)
+
     columns = st.columns(4)
-    columns[0].metric("Images Evaluated", len(frame))
-    columns[1].metric("Accuracy", f"{accuracy:.1f}%")
-    columns[2].metric("Mean Confidence",
+    columns[0].metric("Detections", f"{len(frame):,}")
+    columns[1].metric("Mean Confidence",
                       f"{frame['confidence'].mean() * 100:.1f}%")
-    columns[3].metric("Localised", f"{localised} / {len(frame)}")
+    columns[2].metric("Needs Review", f"{needs_review:,}",
+                      help="Detections below 50% confidence.")
+    if accuracy is None:
+        columns[3].metric("Accuracy", "—",
+                          help="No ground-truth labels for these images, so "
+                               "accuracy cannot be computed.")
+    else:
+        verification = da.verification_counts(frame)
+        columns[3].metric(
+            "Accuracy", f"{accuracy:.1f}%",
+            help=f"Over the {verification['correct'] + verification['incorrect']:,} "
+                 f"labelled detections only; "
+                 f"{verification['unverified']:,} are unverified.")
+    columns_note = ("Localised: "
+                    f"{localised:,} of {len(frame):,} detections produced a "
+                    f"bounding box or mask.")
+    st.caption(columns_note)
 
 
 def _filter_controls(frame: pd.DataFrame) -> pd.DataFrame:
     left, right = st.columns([2, 1])
     threshold = left.slider("Confidence threshold", 0.0, 1.0, 0.0, 0.05)
     order = right.selectbox(
-        "Sort by", ["Confidence (high)", "Confidence (low)", "Correct first"])
+        "Sort by", ["Most confident first", "Least confident first"])
 
     filtered = frame[frame["confidence"] >= threshold]
-    if order.startswith("Confidence"):
-        filtered = filtered.sort_values(
-            "confidence", ascending=order == "Confidence (low)")
-    else:
-        filtered = filtered.sort_values("correct", ascending=False)
+    filtered = filtered.sort_values(
+        "confidence", ascending=order.startswith("Least"))
 
     st.caption(f"Showing {len(filtered)} of {len(frame)} images at or above "
                f"{threshold:.0%} confidence.")
@@ -68,16 +83,23 @@ def _filter_controls(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _results_table(frame: pd.DataFrame) -> None:
-    columns = [c for c in ["image_id", "species", "confidence",
-                           "detection_quality", "location_type", "correct"]
-               if c in frame.columns]
+    wanted = ["image_id", "camera_id", "species", "confidence", "band",
+              "detection_quality", "location_type"]
+    if da.has_ground_truth(frame):
+        wanted.append("verification")
+
+    columns = [column for column in wanted if column in frame.columns]
     display = frame[columns].assign(
-        confidence=frame["confidence"].map("{:.1%}".format))
+        confidence=frame["confidence"].map("{:.1%}".format),
+        band=frame["band"].map(da.band_label))
     st.dataframe(
         display, width="stretch", height=260, hide_index=True,
         column_config={
+            "image_id": "Image",
+            "camera_id": "Camera",
             "species": "Species (run for)",
             "confidence": "Confidence",
+            "band": "Assessment",
             "detection_quality": "Quality",
             "location_type": "Output",
-            "correct": st.column_config.CheckboxColumn("Correct")})
+            "verification": "Against label"})

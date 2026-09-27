@@ -1,60 +1,141 @@
-"""Image Review page (UC2, UC6) — visual inspection of detections."""
+"""
+Image Review page (UC2, UC6) — visual inspection of detections.
+
+Review is organised by model confidence rather than by correctness. That is a
+deliberate change from the earlier version, which split detections into
+"correct" and "incorrect" grids.
+
+Those grids only worked because Snapshot Serengeti ships with citizen-science
+labels for every image. A user with their own camera trap photographs has no
+labels — that is the reason they are running a classifier at all — so the
+split would be empty or, worse, would report everything as incorrect.
+
+Confidence is available for every detection whether or not a label exists, and
+it points a reviewer at the right images: you cannot know which predictions
+are wrong without ground truth, but you always know which ones the model was
+unsure about. Reviewing those is how ground truth gets created.
+"""
 
 from __future__ import annotations
+
+import pathlib
 
 import streamlit as st
 from PIL import Image
 
 from wildlife_monitor.dashboard import data_access as da
 from wildlife_monitor.dashboard.components import (
-    header, image_count_slider, detection_grid,
+    header, rule, image_count_slider, detection_grid, BAND_COLOURS,
 )
-from wildlife_monitor.dashboard.theme import BLACK, POS, NEG
+from wildlife_monitor.dashboard.theme import BLACK, GREY
+
+_BAND_ORDER = ["low", "medium", "high"]
+_BAND_HELP = {
+    "low": "The model was unsure. These are the images worth checking first.",
+    "medium": "Moderate confidence — a quick look is usually enough.",
+    "high": "The model was confident. Spot-check rather than review in full.",
+}
 
 
 def render(species: str, pipeline: str) -> None:
     header(f"Image Review — {da.pretty(species)}",
-           "Visual inspection of detections and overlays · UC2, UC6")
+           "Visual inspection, ordered by what needs attention · UC2, UC6")
 
-    view = st.radio(
-        "View mode",
-        ["Detection Overlays", "Correct Detections", "Incorrect Detections"],
-        horizontal=True, label_visibility="collapsed")
-
+    view = st.radio("View mode", ["Detections", "Detection Overlays"],
+                    horizontal=True, label_visibility="collapsed")
     if view == "Detection Overlays":
         _render_overlays(pipeline, species)
     else:
-        _render_detections(species, pipeline, want_correct=view.startswith("Correct"))
+        _render_detections(species, pipeline)
+
+
+def _render_detections(species: str, pipeline: str) -> None:
+    frame = da.load_detections(pipeline, species)
+    if frame.empty:
+        st.info("Run the pipeline first to review detections.")
+        return
+
+    _band_summary(frame)
+    rule()
+
+    left, right = st.columns([2, 2])
+    with left:
+        chosen = st.multiselect(
+            "Confidence bands", _BAND_ORDER, default=["low"],
+            format_func=lambda band: f"{da.band_label(band)} "
+                                      f"({int((frame['band'] == band).sum())})")
+    with right:
+        order = st.selectbox("Order", ["Least confident first",
+                                        "Most confident first"])
+
+    if not chosen:
+        st.info("Select at least one confidence band.")
+        return
+
+    subset = frame[frame["band"].isin(chosen)].sort_values(
+        "confidence", ascending=order.startswith("Least"))
+
+    for band in chosen:
+        if band in _BAND_HELP and len(chosen) == 1:
+            st.caption(_BAND_HELP[band])
+
+    st.markdown(
+        f"<div style='font-size:13px;color:{BLACK};margin-bottom:10px'>"
+        f"<b>{len(subset)}</b> detections in view for "
+        f"<b>{da.pretty(species)}</b></div>", unsafe_allow_html=True)
+
+    if subset.empty:
+        st.info("No detections in the selected bands.")
+        return
+
+    count = image_count_slider(len(subset))
+    if count:
+        detection_grid(subset, count, per_row=3)
+
+
+def _band_summary(frame) -> None:
+    """Confidence split, plus verification only where labels actually exist."""
+    counts = frame["band"].value_counts()
+    columns = st.columns(4)
+    columns[0].metric("Detections", f"{len(frame):,}")
+    for column, band in zip(columns[1:], _BAND_ORDER):
+        value = int(counts.get(band, 0))
+        share = value / len(frame) * 100 if len(frame) else 0
+        column.metric(da.band_label(band), f"{value:,}", f"{share:.0f}%",
+                      delta_color="off")
+
+    if da.has_ground_truth(frame):
+        verification = da.verification_counts(frame)
+        accuracy = da.accuracy_of(frame)
+        st.caption(
+            f"Ground-truth labels are available for "
+            f"{verification['correct'] + verification['incorrect']:,} of "
+            f"{len(frame):,} detections, of which "
+            f"{accuracy:.1f}% match the predicted species. The remaining "
+            f"{verification['unverified']:,} are unverified — not wrong, "
+            f"simply unlabelled.")
+    else:
+        st.caption("These images carry no ground-truth labels, so accuracy "
+                   "cannot be computed. Confidence is the available signal, "
+                   "and your review is what turns it into ground truth.")
 
 
 def _render_overlays(pipeline: str, species: str) -> None:
     """Show overlays filtered to the selected species only."""
     all_paths = da.overlay_paths(pipeline)
     if not all_paths:
-        st.info(f"No overlays for {da.PIPELINE_DISPLAY.get(pipeline, {}).get('label', pipeline)}. "
-                f"Run the pipeline to generate them.")
+        label = da.PIPELINE_DISPLAY.get(pipeline, {}).get("label", pipeline)
+        st.info(f"No overlays for {label}. Run the pipeline to generate them.")
         return
 
-    # Filter overlay paths to those belonging to the selected species.
-    # The detections CSV tells us exactly which image stems were processed
-    # for this species — use those stems to filter the overlay folder.
     frame = da.load_detections(pipeline, species)
+    paths = all_paths
     if not frame.empty and "image_path" in frame.columns:
-        import pathlib
-        valid_stems = {
-            pathlib.Path(str(p)).stem
-            for p in frame["image_path"].dropna()
-        }
-        paths = [p for p in all_paths if p.stem.replace("_overlay", "") in valid_stems]
-        if not paths:
-            # Fallback: match by overlay stem containing species name
-            paths = all_paths
-    else:
-        paths = all_paths
-
-    if not paths:
-        st.info(f"No overlays found for {da.pretty(species)}. Run the pipeline first.")
-        return
+        stems = {pathlib.Path(str(path)).stem
+                 for path in frame["image_path"].dropna()}
+        matched = [path for path in all_paths
+                   if path.stem.replace("_overlay", "") in stems]
+        paths = matched or all_paths
 
     count = image_count_slider(len(paths))
     selected = paths[:count]
@@ -63,26 +144,3 @@ def _render_overlays(pipeline: str, species: str) -> None:
             with column:
                 st.image(Image.open(path), width="stretch")
                 st.caption(path.stem[:38])
-
-
-def _render_detections(species: str, pipeline: str, want_correct: bool) -> None:
-    frame = da.load_detections(pipeline, species)
-    if frame.empty:
-        st.info("Run the pipeline first to review detections.")
-        return
-
-    subset = frame[frame["correct"] == want_correct].sort_values(
-        "confidence", ascending=False)
-    colour = POS if want_correct else NEG
-    label = "correct" if want_correct else "incorrect"
-    st.markdown(
-        f"<div style='font-size:13px;color:{BLACK};margin-bottom:10px'>"
-        f"<b style='color:{colour}'>{len(subset)}</b> {label} detections for "
-        f"<b>{da.pretty(species)}</b></div>", unsafe_allow_html=True)
-
-    if subset.empty:
-        st.info(f"No {label} detections to display.")
-        return
-    count = image_count_slider(len(subset))
-    if count:
-        detection_grid(subset, count, per_row=3)

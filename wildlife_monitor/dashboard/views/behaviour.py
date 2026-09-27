@@ -21,7 +21,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from wildlife_monitor.dashboard import data_access as da
-from wildlife_monitor.dashboard.components import header, rule, note
+from wildlife_monitor.dashboard.components import (
+    header, rule, note, sufficiency_panel,
+)
 from wildlife_monitor.dashboard.theme import (
     PLOT, GRID, CHART_SEQ, WHITE, BLACK, GREY, POS, NEG, ACCENT,
 )
@@ -73,6 +75,8 @@ def render(species: str) -> None:
 
     _metric_row(predictions, metrics, service)
     rule()
+    _data_sufficiency(species)
+    rule()
     _class_distributions(predictions)
     rule()
     _held_out_performance(metrics)
@@ -86,6 +90,17 @@ def render(species: str) -> None:
     _validation_section(species)
     rule()
     _provenance(service, metrics)
+
+
+def _data_sufficiency(species: str) -> None:
+    """What this deployment's data can honestly support."""
+    st.subheader("What This Data Supports")
+    report = da.sufficiency(species)
+    sufficiency_panel(report)
+    if not report.supports("movement"):
+        note("Movement classifications are shown below because the model "
+             "produces them, but on this data they are not dependable. Read "
+             "the activity results instead.", ok=False)
 
 
 def _no_model_guidance(species: str) -> None:
