@@ -33,7 +33,6 @@ from pathlib import Path
 import pandas as pd
 
 from wildlife_monitor.config import RESULTS_DIR, SUBSET_CSV
-from wildlife_monitor.data import load_species_subset
 from wildlife_monitor.db import database_exists, load_detections as db_detections
 
 # Human-readable species names for display.
@@ -309,14 +308,41 @@ def behaviour_checkpoints() -> list[dict[str, str]]:
 
 
 def behaviour_architectures(species: str) -> list[str]:
-    """Architectures with a trained checkpoint for this species."""
-    return sorted({entry["architecture"] for entry in behaviour_checkpoints()
-                   if entry["species"] == species})
+    """Architectures usable for this species, including the pooled model.
+
+    A species with no model of its own can still be classified by the
+    cross-species model, so its architectures count here. Without this the
+    page would refuse to open for exactly the users the pooled model exists
+    to serve.
+    """
+    from wildlife_monitor.pipeline2.inference import CROSS_SPECIES_KEY
+    entries = behaviour_checkpoints()
+    own = {entry["architecture"] for entry in entries
+           if entry["species"] == species}
+    pooled = {entry["architecture"] for entry in entries
+              if entry["species"] == CROSS_SPECIES_KEY}
+    return sorted(own | pooled)
+
+
+def has_own_behaviour_model(species: str, architecture: str = "") -> bool:
+    """Whether this species has a model trained on it specifically."""
+    return any(entry["species"] == species
+               and (not architecture
+                    or entry["architecture"] == architecture)
+               for entry in behaviour_checkpoints())
 
 
 def load_behaviour_metrics(species: str, architecture: str) -> dict:
-    """Training metadata and held-out metrics for one trained model."""
+    """Training metadata and held-out metrics for the model in use.
+
+    Falls back to the cross-species metrics when this species has no model of
+    its own, so the provenance panel describes the model that actually
+    produced the predictions on screen.
+    """
     path = BEHAVIOUR_RESULTS_DIR / f"{species}_{architecture}_metrics.json"
+    if not path.exists():
+        pooled = BEHAVIOUR_RESULTS_DIR / f"cross_species_{architecture}_metrics.json"
+        path = pooled if pooled.exists() else path
     if not path.exists():
         return {}
     try:
@@ -326,12 +352,28 @@ def load_behaviour_metrics(species: str, architecture: str) -> dict:
 
 
 def load_behaviour_service(species: str, architecture: str):
-    """Load the trained model for a species, or None when it is absent."""
+    """Best available model for a species, or None when there is none.
+
+    Prefers a model trained on this species and falls back to the
+    cross-species model, so an ecologist working on an untrained species
+    still gets classifications.
+    """
     from wildlife_monitor.pipeline2.inference import BehaviourService
     try:
-        return BehaviourService.load(species, architecture)
-    except (FileNotFoundError, ValueError, KeyError):
+        return BehaviourService.load_for(species, architecture)
+    except (FileNotFoundError, OSError, ValueError, KeyError):
         return None
+
+
+def load_cross_species_metrics(architecture: str) -> dict:
+    """Leave-one-species-out generalisation results, when they exist."""
+    path = BEHAVIOUR_RESULTS_DIR / f"cross_species_{architecture}_metrics.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def behaviour_detections(species: str) -> pd.DataFrame:

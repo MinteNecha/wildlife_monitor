@@ -73,6 +73,7 @@ def render(species: str) -> None:
                    "no detections for this species to classify.")
         return
 
+    _model_in_use(service, species)
     _metric_row(predictions, metrics, service)
     rule()
     _data_sufficiency(species)
@@ -80,6 +81,8 @@ def render(species: str) -> None:
     _class_distributions(predictions)
     rule()
     _held_out_performance(metrics)
+    rule()
+    _generalisation(architecture)
     rule()
     _camera_table(predictions)
     rule()
@@ -444,6 +447,83 @@ def _validation_section(species: str) -> None:
                          width="stretch", hide_index=True)
 
 
+def _model_in_use(service, species: str) -> None:
+    """Say plainly which model answered, before any numbers are shown.
+
+    A prediction from a model that has never seen this animal is a weaker
+    claim than one from a model trained on it. A reader who cannot tell the
+    two apart will over-trust the first.
+    """
+    if not getattr(service, "is_cross_species", False):
+        return
+
+    trained = ", ".join(da.pretty(name)
+                        for name in service.trained_species) or "several species"
+    if service.saw_species(species):
+        note(f"Classified by the cross-species model, trained on {trained}. "
+             f"{da.pretty(species)} was part of its training data.", ok=True)
+        return
+
+    note(f"<b>{da.pretty(species)} has no model of its own.</b> These "
+         f"classifications come from the cross-species model, trained on "
+         f"{trained}. It has never seen this species, so treat the results as "
+         f"indicative and expect lower accuracy than the figures below, which "
+         f"were measured on species it had also never seen.", ok=False)
+
+
+def _generalisation(architecture: str) -> None:
+    """How well the pooled model transfers to species it never trained on.
+
+    This is the evidence behind any prediction made for an untrained species,
+    so it belongs on the page rather than only in a metrics file.
+    """
+    report = da.load_cross_species_metrics(architecture)
+    folds = report.get("folds") or []
+    if not folds:
+        return
+
+    st.subheader("Generalisation to Unseen Species")
+    st.caption("Each row trains the model without that species, then tests it "
+               "on that species alone. Every test camera is therefore an "
+               "animal the model has never encountered.")
+
+    chance = float(report.get("chance_baseline", 33.33))
+    frame = pd.DataFrame([{
+        "Held-out species": da.pretty(fold["held_out_species"]),
+        "Trained on": len(fold.get("train_species", [])),
+        "Test cameras": fold.get("test_cameras", 0),
+        "Activity": f"{fold.get('activity_accuracy', 0):.1f}%",
+        "Movement": f"{fold.get('movement_accuracy', 0):.1f}%",
+    } for fold in folds])
+    st.dataframe(frame, width="stretch", hide_index=True)
+
+    mean = float(report.get("mean_movement_accuracy", 0.0))
+    scores = [float(fold.get("movement_accuracy", 0.0)) for fold in folds]
+    columns = st.columns(3)
+    columns[0].metric("Mean movement accuracy", f"{mean:.1f}%")
+    columns[1].metric("Chance baseline", f"{chance:.1f}%")
+    columns[2].metric("Spread across species",
+                      f"{max(scores) - min(scores):.1f} pts" if scores else "—")
+
+    if mean >= 70:
+        note(f"Movement classification transfers to unseen species at "
+             f"{mean:.1f}%. The model learned the shape of a detection "
+             f"history rather than the identity of one animal.", ok=True)
+    elif mean >= chance + 10:
+        note(f"Movement classification partly transfers at {mean:.1f}%, "
+             f"against a {chance:.1f}% chance baseline. There is "
+             f"species-independent signal, but well short of the accuracy on "
+             f"a species the model was trained on.", ok=False)
+    else:
+        note(f"Movement classification does not transfer. At {mean:.1f}% "
+             f"against a {chance:.1f}% chance baseline, predictions for an "
+             f"untrained species should not be relied on.", ok=False)
+
+    st.caption("These labels come from a quantile rule computed within each "
+               "species, so this measures whether the rule's shape transfers, "
+               "not whether real animal behaviour does.")
+
+
 def _provenance(service, metrics: dict) -> None:
     """Where this prediction came from — model, data, and known limitations."""
     st.subheader("Model Provenance")
@@ -477,6 +557,9 @@ def _provenance(service, metrics: dict) -> None:
                 f"<div style='font-size:12px;color:{GREY};line-height:1.9'>"
                 f"<b style='color:{BLACK}'>Movement label balance</b><br>"
                 f"{lines}</div>", unsafe_allow_html=True)
+
+    if hasattr(service, "provenance"):
+        st.caption(service.provenance())
 
     st.caption(
         "Activity and movement are model predictions. Social structure is "
