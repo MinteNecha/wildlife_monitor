@@ -17,12 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime
-from pathlib import Path
-
 import numpy as np
 
 from wildlife_monitor.config import RESULTS_DIR
-from wildlife_monitor.db import database_exists, load_detections
+from wildlife_monitor.db import database_exists
+from wildlife_monitor.pipeline2.datasets import (
+    DEFAULT_EPOCHS, DEFAULT_PIPELINE, METRICS_DIR, load_species_detections,
+)
 from wildlife_monitor.pipeline2.inference import BEHAVIOUR_DIR, checkpoint_path
 from wildlife_monitor.pipeline2.models import build_model
 from wildlife_monitor.pipeline2.train import (
@@ -30,9 +31,7 @@ from wildlife_monitor.pipeline2.train import (
     train_model, evaluate_model,
 )
 
-DEFAULT_PIPELINE = "bioclip_megadetector"
-DEFAULT_EPOCHS = {"lstm": 100, "transformer": 40}
-METRICS_DIR = RESULTS_DIR / "behaviour"
+
 
 
 def _store_patterns(species: str, architecture: str, frame) -> int:
@@ -46,28 +45,6 @@ def _store_patterns(species: str, architecture: str, frame) -> int:
     except Exception as error:
         print(f"[WARN] Could not store patterns: {error}")
         return 0
-
-
-def load_species_detections(species: str, pipeline: str):
-    """Detections for one species, from the database (the system of record).
-
-    Falls back to a detections CSV when the database has no rows for this
-    species, so results archived before the migration still train.
-    """
-    if database_exists():
-        frame = load_detections(species, pipeline)
-        if not frame.empty:
-            return frame, "database"
-
-    csv_path = RESULTS_DIR / pipeline / f"detections_{species}.csv"
-    if csv_path.exists():
-        import pandas as pd
-        return pd.read_csv(csv_path), str(csv_path)
-
-    raise FileNotFoundError(
-        f"No detections for '{species}' in the database or at {csv_path}. "
-        f"Run Pipeline 1 for this species, or import existing CSVs with "
-        f"'python scripts/import_results.py'.")
 
 
 def train_one(species: str, architecture: str, pipeline: str, max_length: int,
