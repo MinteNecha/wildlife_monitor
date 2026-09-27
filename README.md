@@ -51,6 +51,7 @@ wildlife_monitor/
     models/      bioclip.py sam1.py sam3.py yolo.py megadetector.py   (P2)
     pipelines/   base.py compare.py + the three concrete pipelines    (P2)
     pipeline2/   autodiff.py         Tensor, autograd, Adam, clipping
+                 datasets.py         shared detection loading for training
                  feature_extractor.py TemporalFeatureExtractor — FR4
                  sequence_builder.py  SequenceBuilder, DetectionSequence
                  labelling.py         the behavioural label rules
@@ -67,7 +68,7 @@ wildlife_monitor/
                  ingest_images.py classify_images.py
                  run_pipeline.py run_compare.py train_behaviour.py
                  evaluate.py evaluate_counts.py compare_models.py
-  tests/         pytest suite (210 tests)
+  tests/         pytest suite (231 tests)
   data/          wildlife.db, subset metadata, images
   models/        detector checkpoints + behaviour/*.npz
   results/       overlays, masks, comparison reports, behaviour metrics
@@ -105,9 +106,12 @@ python scripts/import_results.py --subset
 python scripts/run_pipeline.py --pipeline bioclip_megadetector --species zebra --top_n 1500
 python scripts/run_compare.py --species zebra --top_n 15
 
-# Pipeline 2 — behaviour
+# Pipeline 2 — behaviour, one model per species
 python scripts/train_behaviour.py --species zebra --model lstm
 python scripts/train_behaviour.py --all --model transformer
+
+# Pipeline 2 — one model across species, tested on species it never saw
+python scripts/train_cross_species.py --all --model lstm
 
 # Dashboard
 streamlit run wildlife_monitor/dashboard/app.py
@@ -267,6 +271,11 @@ the measurements behind each decision.
 - **Camera identity is deliberately excluded** from the feature vector. Models
   are evaluated on held-out cameras, so a raw camera identifier cannot
   generalise and would only let the model memorise training sites.
+- **Two ways to train the behaviour model.** `train_behaviour.py` trains one
+  model per species and tests it on held-out cameras of that same species.
+  `train_cross_species.py` trains one model across species and tests it on a
+  species held out entirely, which is the harder question and the one FR5 and
+  VL3 specify. Per-species accuracy will always be the higher number.
 - **Movement classes are relative to one deployment.** They say which cameras
   stand out among the cameras supplied, not whether an animal migrates in an
   absolute sense. Roughly a quarter of cameras come out territorial by

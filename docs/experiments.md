@@ -311,7 +311,72 @@ there from the start for Serengeti's sake.
 
 ---
 
-## 11. Interpreting the accuracy figures
+## 11. Held-out cameras versus held-out species
+
+Until now every behavioural model was trained on one species and tested on
+held-out *cameras* of that same species. That answers a narrow question: can
+the model apply the rule to a new site for an animal it already knows.
+
+FR5 asks for something harder, namely "a minimum classification accuracy of
+75% **on held-out species**", and VL3 specifies the protocol: "train the model
+excluding 15% of species entirely". `scripts/train_cross_species.py`
+implements it.
+
+**Why the distinction matters.** A per-species model only ever sees one
+animal, so a high score cannot separate two very different things: learning
+what a migratory detection history looks like, or memorising the quirks of one
+species' cameras. Only a species the model has never seen can tell them apart.
+
+**Leave-one-species-out rather than a single split.** With five species a
+single held-out split rests on whichever species is chosen. Every species
+takes a turn instead, giving one generalisation result per species. This also
+makes each test set far larger than the per-species runs: a whole species of
+roughly 100 to 150 cameras, rather than 20% of one species' 20 to 27.
+
+| | Per-species model | Cross-species model |
+|---|---|---|
+| Models stored | one per species | one, total |
+| Training cameras | about 98 | about 500 |
+| Test cameras | about 25 | 101 to 148 |
+| Test set is | new sites, known animal | an animal never seen |
+| Serves a new species | no, must train first | yes |
+
+**Labels are computed per species, then pooled.** This is the subtle part.
+`classify_movement` compares a camera against `quantile(0.75)` of the other
+cameras. Pooling the frames before computing that quantile would span a
+mixture of animals and silently relabel every camera, making the cross-species
+results incomparable with everything above. Computing per species and pooling
+afterwards keeps every label identical.
+`test_pooling_does_not_change_a_single_label` pins this, because nothing would
+crash if it broke.
+
+**A negative control guards the measurement.** A model that scores well
+against randomly permuted held-out labels is measuring an artefact rather than
+signal. `test_shuffled_labels_collapse_to_chance` asserts that accuracy falls
+back toward the 33.3% chance baseline when the labels are shuffled. On
+synthetic data the real labels score 100% and the shuffled ones 30%.
+
+**What the result will mean.** Around 70% or better means the timing pattern
+transfers and the model learned behaviour rather than an animal. Around 33% is
+chance across three classes, meaning the per-species models were learning
+species-specific patterns. Either is a result worth reporting, and the honest
+one cannot be known until the run happens.
+
+**One caveat that belongs with any figure produced.** Because the labels come
+from a quantile rule computed within each species, this measures whether the
+rule's *shape* transfers across species, not whether real animal behaviour
+does. That is a narrower claim than the accuracy figure suggests.
+
+**Serving consequence.** `BehaviourService.load_for` prefers a species' own
+model and falls back to the cross-species model. Without that fallback an
+ecologist uploading a species the project never trained on gets nothing at all
+from the behavioural page. The dashboard states which model answered, and
+says plainly when a prediction comes from a model that has never seen that
+animal.
+
+---
+
+## 12. Interpreting the accuracy figures
 
 Two caveats apply to every number in this document.
 
