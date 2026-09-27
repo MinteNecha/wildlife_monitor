@@ -151,6 +151,35 @@ The autodiff tests compare every backward pass against a central finite
 difference. A wrong gradient does not crash — it quietly trains the wrong
 thing — so these are the suite's most important tests.
 
+## What the data must look like
+
+The behavioural rules compare each camera against the others, so they degrade
+quietly rather than failing loudly on thin data. `data/sufficiency.py` checks
+three things before any result is presented:
+
+| Requirement | Minimum | Dependable | Why |
+|---|---|---|---|
+| **Time span** | 3 months | 6+ months | Migratory and territorial differ by seasonal spread. Under 3 months every camera looks equally concentrated and *every* camera is labelled migratory. |
+| **Cameras** | 10 | 30+ | Movement classes are assigned by percentile across cameras. With 4 cameras, "top 25%" is one camera. |
+| **Detections per camera** | 3 | 10+ | Three is the coded floor for migratory eligibility; below ten the day/night vote flips on one or two photographs. |
+
+The headline for a new user: **this needs months, not more photographs.** A
+thousand images from a two-week deployment cannot support movement
+classification. Thirty cameras over six months can.
+
+Activity timing (day/night) and social structure (group size) need no
+particular time span and work on much less data.
+
+### What an external user supplies
+
+1. Images in one folder per camera site
+2. A four-column `cameras.csv` — `camera_id, latitude, longitude, habitat_type`
+3. Optionally a species shortlist; otherwise the default 13 are used
+
+Capture times are read from EXIF. No species labels are required — and where
+none exist, detections are shown as **unverified** rather than counted wrong,
+with model confidence as the available signal.
+
 ## Known limitations
 
 These are stated plainly because they affect how the results should be read.
@@ -169,6 +198,10 @@ the measurements behind each decision.
 - **Camera identity is deliberately excluded** from the feature vector. Models
   are evaluated on held-out cameras, so a raw camera identifier cannot
   generalise and would only let the model memorise training sites.
+- **Movement classes are relative to one deployment.** They say which cameras
+  stand out among the cameras supplied, not whether an animal migrates in an
+  absolute sense. Roughly a quarter of cameras come out territorial by
+  construction.
 
 ## Optional: enable SAM 3
 
