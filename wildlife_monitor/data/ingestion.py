@@ -9,10 +9,13 @@ camera, which is how camera trap users already organise their files:
       SiteA/  IMG_0001.JPG  IMG_0002.JPG  ...
       SiteB/  ...
 
-The folder name becomes the camera identifier. Capture times come from EXIF,
-which camera traps write reliably. Location and habitat come from the camera
-registry. Nothing here needs to know what species is in any photograph — that
-is what the classification step is for.
+The folder name becomes the camera identifier. Capture times are resolved by
+``data.timestamps``, which tries an annotation JSON, a metadata CSV, EXIF and
+then the file name, and reports which source answered for each image. Location
+and habitat come from the camera registry. Nothing here needs to know what
+species is in any photograph — that is what the classification step is for,
+though an annotation or metadata file that carries species labels has them
+recorded as ground truth so accuracy becomes measurable rather than unverified.
 
 Ingestion is idempotent. Image identifiers are derived from the camera and the
 file name, so re-running over the same folder updates rather than duplicates.
@@ -27,6 +30,8 @@ from pathlib import Path
 from wildlife_monitor.config import IMAGES_DIR
 from wildlife_monitor.data.cameras import CameraRegistry
 from wildlife_monitor.data.preparation import ImagePreparer, PreparationResult
+from wildlife_monitor.data import timestamps
+from wildlife_monitor.data.timestamps import TimestampResolver
 from wildlife_monitor.data.validator import ImageValidator
 from wildlife_monitor.db import Database
 
@@ -44,8 +49,12 @@ class IngestionReport:
     adjusted: int = 0
     upscaled: int = 0
     undated: int = 0
+    labelled: int = 0
     first_capture: str = ""
     last_capture: str = ""
+    timestamp_sources: list[tuple[str, int]] = field(default_factory=list)
+    timestamp_chain: str = ""
+    timestamp_notes: list[str] = field(default_factory=list)
 
     @property
     def rejected_count(self) -> int:
@@ -62,7 +71,17 @@ class IngestionReport:
             parts.append(f"{self.upscaled:,} enlarged (no detail added)")
         if self.undated:
             parts.append(f"{self.undated:,} without a capture time")
+        if self.labelled:
+            parts.append(f"{self.labelled:,} with a species label")
         return " · ".join(parts)
+
+    def timestamp_line(self) -> str:
+        """Where the capture times came from, source by source."""
+        if not self.timestamp_sources:
+            return ""
+        found = [f"{count:,} from {name}" for name, count
+                 in self.timestamp_sources]
+        return "Capture times: " + ", ".join(found) + "."
 
 
 def discover_cameras(root: str | Path) -> dict[str, list[Path]]:
@@ -95,17 +114,37 @@ def image_identifier(camera_id: str, path: Path) -> str:
     return f"{camera_id}_{path.stem}".replace(" ", "_")
 
 
+def _relative_name(root: str | Path, path: Path) -> str:
+    """The name to look an image up under in supplied metadata.
+
+    The path relative to the ingestion root, because an annotation file names
+    images by a nested path ('S1/B04/B04_R1/…JPG') while a CSV usually names
+    them by file alone. The relative path carries both: the resolver indexes
+    each record under its full spelling and its tail, so either matches.
+    """
+    try:
+        return path.relative_to(Path(root)).as_posix()
+    except ValueError:
+        return path.name
+
+
 class ImageIngestor:
     """Validates, prepares and records a folder of camera trap photographs."""
 
     def __init__(self, validator: ImageValidator | None = None,
                  preparer: ImagePreparer | None = None,
                  images_dir: Path | None = None,
-                 db_path: str | Path | None = None) -> None:
+                 db_path: str | Path | None = None,
+                 resolver: TimestampResolver | None = None) -> None:
         self.validator = validator or ImageValidator()
         self.preparer = preparer
         self.images_dir = Path(images_dir) if images_dir else IMAGES_DIR
         self.db_path = db_path
+        # A resolver is always present. Without supplied metadata it is just
+        # EXIF then the file name, which is what ingestion did before, so the
+        # default behaviour is unchanged and nothing has to opt in.
+        self.resolver = resolver or TimestampResolver(
+            validator=self.validator)
 
     def ingest(self, root: str | Path, registry: CameraRegistry,
                dry_run: bool = False) -> IngestionReport:
@@ -132,18 +171,55 @@ class ImageIngestor:
 
                 for path in paths:
                     captured = self._ingest_one(
-                        database, camera_id, path, report, dry_run)
+                        database, camera_id, path, report, dry_run,
+                        key=_relative_name(root, path))
                     if captured:
                         captures.append(captured)
 
         if captures:
             captures.sort()
             report.first_capture, report.last_capture = captures[0], captures[-1]
+        self._record_sources(report)
         return report
 
+    def _record_sources(self, report: IngestionReport) -> None:
+        """Copy the resolver's account of its work into the report."""
+        report.timestamp_chain = self.resolver.describe_chain()
+        report.timestamp_sources = [
+            (name, count) for name, count in self.resolver.breakdown()
+            if name != timestamps.NONE]
+        report.timestamp_notes = self.resolver.warnings()
+
+    def _ground_truth(self, database, key: str, camera_id: str,
+                      report: IngestionReport, dry_run: bool) -> int | None:
+        """Species id for an image whose supplied metadata names its species.
+
+        Most users have no labels, which is the whole point of the classifier.
+        A user who does — anyone with a Snapshot Serengeti annotation file, or
+        an export from software they have already reviewed in — gets them
+        stored, which turns the Image Review page's accuracy figure from
+        unverified into measured.
+        """
+        if not self.resolver.has_labels:
+            return None
+        species = self.resolver.label_for(key, camera_id)
+        if not species:
+            return None
+        report.labelled += 1
+        if dry_run:
+            return None
+        return database.species.ensure(species)
+
     def _ingest_one(self, database, camera_id: str, path: Path,
-                    report: IngestionReport, dry_run: bool) -> str:
-        """Handle one photograph. Returns its capture time, if it has one."""
+                    report: IngestionReport, dry_run: bool,
+                    key: str = "") -> str:
+        """Handle one photograph. Returns its capture time, if it has one.
+
+        ``key`` is the name to look the image up under in any supplied
+        metadata — its path relative to the ingestion root, which matches both
+        a nested annotation file's ``file_name`` and a flat CSV's bare name.
+        """
+        key = key or path.name
         result = self.validator.validate(path)
         prepared: PreparationResult | None = None
 
@@ -164,15 +240,18 @@ class ImageIngestor:
             if candidate.prepared and candidate.changed:
                 prepared = candidate
 
-        captured = self.validator.extract_timestamp(path)
-        captured_at = captured.isoformat(sep=" ") if captured else ""
-        if not captured_at:
+        resolution = self.resolver.resolve(key, camera_id, path)
+        captured_at = resolution.text
+        if not resolution.found:
             report.undated += 1
 
         if prepared is not None:
             report.adjusted += 1
             if prepared.cosmetic_only:
                 report.upscaled += 1
+
+        ground_truth_id = self._ground_truth(
+            database, key, camera_id, report, dry_run)
 
         if dry_run:
             report.ingested += 1
@@ -186,7 +265,7 @@ class ImageIngestor:
 
         database.images.ensure(
             image_identifier(camera_id, path), camera_id, captured_at,
-            str(destination), None, width, height,
+            str(destination), ground_truth_id, width, height,
             prepared=prepared is not None,
             upscaled=bool(prepared and prepared.cosmetic_only))
         report.ingested += 1
@@ -220,6 +299,7 @@ class ImageIngestor:
         if captures:
             captures.sort()
             report.first_capture, report.last_capture = captures[0], captures[-1]
+        self._record_sources(report)
         return report
 
     def _ingest_upload(self, database, camera_id: str, file,
@@ -244,10 +324,16 @@ class ImageIngestor:
             report.rejected.append((name, result.reason))
             return ""
 
-        captured = self.validator.extract_timestamp(file)
-        captured_at = captured.isoformat(sep=" ") if captured else ""
-        if not captured_at:
+        # EXIF has to be read from the file object, which is what is in hand;
+        # every other source works from the name.
+        file.seek(0)
+        resolution = self.resolver.resolve(name, camera_id, file)
+        captured_at = resolution.text
+        if not resolution.found:
             report.undated += 1
+
+        ground_truth_id = self._ground_truth(
+            database, name, camera_id, report, dry_run=False)
 
         folder = self.images_dir / camera_id
         folder.mkdir(parents=True, exist_ok=True)
@@ -268,7 +354,7 @@ class ImageIngestor:
 
         database.images.ensure(
             f"{camera_id}_{stem}".replace(" ", "_"), camera_id, captured_at,
-            str(destination), None, width, height,
+            str(destination), ground_truth_id, width, height,
             prepared=prepared is not None,
             upscaled=bool(prepared and prepared.cosmetic_only))
         report.ingested += 1
