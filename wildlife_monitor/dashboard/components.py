@@ -17,6 +17,11 @@ from PIL import Image
 from wildlife_monitor.dashboard import data_access as da
 from wildlife_monitor.dashboard.theme import BLACK, GREY, POS, NEG
 
+# Colour per confidence band. Low confidence is flagged not because it is
+# wrong — without ground truth that is unknowable — but because it is where a
+# human reviewer's attention is worth spending.
+BAND_COLOURS = {"high": POS, "medium": "#E67E22", "low": NEG}
+
 
 def header(title: str, subtitle: str = "") -> None:
     """Render a page header with an optional subtitle."""
@@ -81,3 +86,43 @@ def _detection_tile(row: pd.Series) -> None:
         f"<div style='font-size:10px;color:{GREY}'>Site {site}</div>",
         unsafe_allow_html=True,
     )
+
+
+STATUS_COLOURS = {"supported": POS, "limited": "#E67E22", "unsupported": NEG}
+_CAPABILITY_TITLES = {
+    "activity": "Activity timing (day / night)",
+    "movement": "Movement strategy (migratory / territorial / nomadic)",
+    "social": "Social structure (group size)",
+}
+
+
+def sufficiency_panel(report, show_guidance: bool = True) -> None:
+    """Render what the available data can and cannot honestly support.
+
+    The behavioural rules never fail loudly on thin data — they compare each
+    camera against the others and always return a confident-looking label. This
+    panel is what stops the dashboard presenting that as fact.
+    """
+    st.markdown(
+        f"<div style='font-size:12px;color:{GREY};margin-bottom:8px'>"
+        f"{report.summary_line()}</div>", unsafe_allow_html=True)
+
+    for capability in report.capabilities:
+        colour = STATUS_COLOURS.get(capability.status, GREY)
+        background = {"supported": "#D1FAE5", "limited": "#FEF3C7",
+                      "unsupported": "#FEE2E2"}.get(capability.status, "#F3F4F6")
+        title = _CAPABILITY_TITLES.get(capability.name,
+                                        capability.name.title())
+        st.markdown(
+            f"<div style='background:{background};border-left:3px solid {colour};"
+            f"border-radius:3px;padding:8px 10px;margin-bottom:6px'>"
+            f"<div style='font-size:12px;font-weight:700;color:{BLACK}'>"
+            f"{title} — <span style='color:{colour}'>{capability.label}</span></div>"
+            f"<div style='font-size:11px;color:{GREY};margin-top:3px'>"
+            f"{capability.reason}</div></div>", unsafe_allow_html=True)
+
+    if show_guidance:
+        from wildlife_monitor.data.sufficiency import guidance_for
+        guidance = guidance_for(report)
+        if guidance:
+            st.caption(guidance)
