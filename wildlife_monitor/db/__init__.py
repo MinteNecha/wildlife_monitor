@@ -14,7 +14,7 @@ from wildlife_monitor.db.repository import (
     Database, DetectionRepository, SpeciesRepository, CameraRepository,
     ImageRepository, PipelineRepository, SequenceRepository,
     BehaviourPatternRepository, ValidationRepository,
-    load_detections, save_detections, save_patterns,
+    load_detections, save_detections, save_patterns, load_images,
 )
 
 __all__ = [
@@ -22,5 +22,5 @@ __all__ = [
     "table_counts", "Database", "DetectionRepository", "SpeciesRepository",
     "CameraRepository", "ImageRepository", "PipelineRepository",
     "SequenceRepository", "BehaviourPatternRepository", "ValidationRepository",
-    "load_detections", "save_detections", "save_patterns",
+    "load_detections", "save_detections", "save_patterns", "load_images",
 ]

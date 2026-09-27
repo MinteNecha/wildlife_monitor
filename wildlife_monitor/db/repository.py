@@ -135,7 +135,9 @@ class ImageRepository(Repository):
     """The Image table — one row per photograph, with its ground truth."""
 
     def ensure(self, image_id: str, camera_id: str, captured_at: str,
-               file_path: str, ground_truth_id: int | None = None) -> str:
+               file_path: str, ground_truth_id: int | None = None,
+               width: int | None = None, height: int | None = None,
+               prepared: bool = False, upscaled: bool = False) -> str:
         image = str(image_id)
         existing = self.connection.execute(
             "SELECT image_id, ground_truth_id FROM Image WHERE image_id = ?",
@@ -143,14 +145,48 @@ class ImageRepository(Repository):
         if existing is None:
             self.connection.execute(
                 "INSERT INTO Image (image_id, camera_id, captured_at, "
-                "file_path, ground_truth_id) VALUES (?, ?, ?, ?, ?)",
+                "file_path, ground_truth_id, width, height, prepared, "
+                "upscaled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (image, str(camera_id), str(captured_at), str(file_path),
-                 ground_truth_id))
+                 ground_truth_id, width, height,
+                 int(bool(prepared)), int(bool(upscaled))))
         elif ground_truth_id is not None and existing["ground_truth_id"] is None:
             self.connection.execute(
                 "UPDATE Image SET ground_truth_id = ? WHERE image_id = ?",
                 (ground_truth_id, image))
         return image
+
+
+class _ImageQueries(Repository):
+    """Reading images back out, for steps that run over ingested photographs."""
+
+    def frame(self, camera_id: str | None = None,
+              unclassified_by: str | None = None) -> pd.DataFrame:
+        """Ingested images joined to their camera.
+
+        ``unclassified_by`` restricts the result to images that the named
+        pipeline has not yet produced a detection for, so a classification run
+        can be resumed without redoing work.
+        """
+        sql = ("SELECT i.image_id, i.camera_id, i.captured_at, i.file_path, "
+               " i.width, i.height, COALESCE(i.upscaled, 0) AS upscaled, "
+               " c.latitude, c.longitude, "
+               " COALESCE(c.habitat_type, 'unknown') AS habitat_type "
+               "FROM Image i JOIN Camera c ON c.camera_id = i.camera_id")
+        clauses, params = [], []
+        if camera_id:
+            clauses.append("i.camera_id = ?")
+            params.append(camera_id)
+        if unclassified_by:
+            clauses.append(
+                "i.image_id NOT IN (SELECT d.image_id FROM Detection d "
+                " JOIN Pipeline p ON p.pipeline_id = d.pipeline_id "
+                " WHERE p.name = ?)")
+            params.append(unclassified_by)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        return pd.read_sql_query(sql + " ORDER BY i.camera_id, i.captured_at",
+                                  self.connection, params=params)
 
 
 class PipelineRepository(Repository):
@@ -409,6 +445,7 @@ class Database:
         self.species = SpeciesRepository(self.connection)
         self.cameras = CameraRepository(self.connection)
         self.images = ImageRepository(self.connection)
+        self.image_queries = _ImageQueries(self.connection)
         self.pipelines = PipelineRepository(self.connection)
         self.detections = DetectionRepository(self.connection)
         self.sequences = SequenceRepository(self.connection)
@@ -447,6 +484,14 @@ def save_detections(records: Sequence[Any],
     """Write a batch of detection records in one transaction."""
     with session(path) as connection:
         return DetectionRepository(connection).save_many(records)
+
+
+def load_images(camera_id: str | None = None,
+                unclassified_by: str | None = None,
+                path: str | Path | None = None) -> pd.DataFrame:
+    """Ingested images, ready for a classification run."""
+    with session(path) as connection:
+        return _ImageQueries(connection).frame(camera_id, unclassified_by)
 
 
 def save_patterns(patterns: Sequence[Any], model_version: str = "",
