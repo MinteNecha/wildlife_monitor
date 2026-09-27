@@ -262,7 +262,56 @@ failing.
 
 ---
 
-## 10. Interpreting the accuracy figures
+## 10. Two timestamp sources considered and refused
+
+Section 2.3.2 of the design document specifies "an optional metadata CSV ...
+pulls timestamps from EXIF data where the metadata does not provide them". Only
+the EXIF half was implemented, which left a gap: the Serengeti runs never used
+EXIF at all. They read `ann["datetime"]` out of `SnapshotSerengetiS01.json`
+through `scripts/extract_ground_truth.py`, so the pipeline was being fed
+curated timestamps while an external user got only whatever EXIF survived.
+
+`data/timestamps.py` closes that gap with four sources in priority order:
+annotation JSON, metadata CSV, EXIF, file name. Two further candidates were
+considered and deliberately left out.
+
+**File modification time — refused.** It is the most tempting source available,
+because unlike every other one it is *always* present. That is exactly the
+problem. Copying a folder, extracting a zip, or syncing to cloud storage resets
+it to the moment of the copy, so a user who moved their photographs off the SD
+card — which is everyone — would get every image stamped within minutes of each
+other. The system would then report a deployment spanning one day, and by
+section 7 above a short deployment labels **100% of cameras migratory**. A
+missing timestamp is reported, counted, and excluded from behavioural analysis;
+a wrong one is silently believed. `test_file_modification_time_is_never_used`
+sets a plausible mtime on an otherwise anonymous photograph and asserts that
+resolution still comes back empty, so the source cannot be reintroduced without
+a test failing.
+
+**A date-only file name — off by default.** `20240315.jpg` carries a real
+calendar month, which is what movement classification needs, but no hour. The
+only way to store it is at midnight, which makes every such image read as
+nocturnal and corrupts activity classification — the one task that works on
+thin data. It is available behind `--dates-from-filenames` for a user who wants
+seasonal coverage and accepts losing day/night timing, and resolutions taken
+that way are reported under their own source name so the count is visible rather
+than folded into the file-name total.
+
+The symmetry is deliberate: both refusals trade a *present but wrong* value for
+an *absent and reported* one, which is the same choice made for the `upscaled`
+flag in section 9 and for tri-state verification in section 8.
+
+**A side benefit worth stating.** Both file-based sources may carry species
+labels as well as times — an annotation JSON always does, a metadata CSV often
+does. Where present these are stored in `Image.ground_truth_id`, which the
+existing `DetectionFlat` view already reads, so a user who has such a file gets
+measured accuracy on the Image Review page instead of the unverified display
+described in section 8. No schema change was needed for this; the column was
+there from the start for Serengeti's sake.
+
+---
+
+## 11. Interpreting the accuracy figures
 
 Two caveats apply to every number in this document.
 

@@ -39,6 +39,11 @@ wildlife_monitor/
                  validator.py   ConfigValidator — FR9 range checking
     data/        loader.py      dataset acquisition + per-species loading (P1)
                  validator.py   ImageValidator — FR1 ingestion checks
+                 timestamps.py  capture-time resolution chain — FR1
+                 cameras.py     CameraRegistry — site locations and habitat
+                 preparation.py ImagePreparer — format, rotation, resolution
+                 ingestion.py   ImageIngestor — folder and upload ingestion
+                 sufficiency.py coverage assessment before any claim
                  export.py      ExportService — FR8 CSV / JSON / PDF
     db/          schema.sql     third-normal-form schema (section 5)
                  connection.py  connections, schema application
@@ -59,9 +64,10 @@ wildlife_monitor/
     utils/       records.py validation.py visualisation.py
   scripts/       setup_data.py init_db.py import_results.py
                  download_subset_images.py extract_ground_truth.py
+                 ingest_images.py classify_images.py
                  run_pipeline.py run_compare.py train_behaviour.py
                  evaluate.py evaluate_counts.py compare_models.py
-  tests/         pytest suite (85 tests)
+  tests/         pytest suite (210 tests)
   data/          wildlife.db, subset metadata, images
   models/        detector checkpoints + behaviour/*.npz
   results/       overlays, masks, comparison reports, behaviour metrics
@@ -189,8 +195,37 @@ python scripts/train_behaviour.py --all --model lstm
 streamlit run wildlife_monitor/dashboard/app.py
 ```
 
-Capture times come from EXIF. The Upload page does the same thing through the
-browser, one camera at a time, and writes the camera file for you.
+The Upload page does the same thing through the browser, one camera at a time,
+and writes the camera file for you.
+
+**Where capture times come from.** Behavioural analysis depends entirely on
+when each photograph was taken, so four sources are tried in order and the
+report says which one answered for each image:
+
+| Priority | Source | Supply it with |
+|---|---|---|
+| 1 | A COCO Camera Traps annotation JSON, e.g. `SnapshotSerengetiS01.json` | `--annotations file.json` |
+| 2 | A metadata CSV of `filename, timestamp` (optionally `camera`, `species`) | `--metadata times.csv` |
+| 3 | EXIF, written by the camera | automatic |
+| 4 | The file name, e.g. `IMG_20240315_093000.jpg` | automatic |
+
+```bash
+python scripts/ingest_images.py --images photos/ --metadata times.csv
+python scripts/ingest_images.py --images photos/ --annotations data/SnapshotSerengetiS01.json
+```
+
+Either supplied file may also carry species labels. Where it does, they are
+stored as ground truth, so Image Review reports measured accuracy instead of
+showing every detection as unverified. This is how the Serengeti runs obtained
+their timestamps and labels, generalised so anyone with such a file can use it.
+
+Two things are refused rather than guessed. **File modification time is never
+used**: copying a folder, extracting a zip or syncing to cloud storage all
+reset it, so it is always present and almost always wrong, which would put
+every photograph in the same week. **A date-only file name is rejected by
+default**, because filling the hour in with midnight would make every such
+image read as nocturnal; `--dates-from-filenames` accepts it for a user who
+only needs seasonal coverage, and the report says how many took that route.
 
 **Classification modes.** `--all` identifies among every configured species.
 `--species zebra` looks for one you already know. `--species zebra,wildebeest`
@@ -236,6 +271,10 @@ the measurements behind each decision.
   stand out among the cameras supplied, not whether an animal migrates in an
   absolute sense. Roughly a quarter of cameras come out territorial by
   construction.
+- **An image with no capture time contributes nothing to behaviour.** It is
+  still stored and still classified, and the ingestion report counts it, but it
+  cannot enter a sequence. A metadata CSV recovers such images; nothing else
+  will.
 
 ## Optional: enable SAM 3
 
