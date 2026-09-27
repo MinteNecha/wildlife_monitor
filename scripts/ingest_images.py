@@ -7,8 +7,8 @@ Expects one folder per camera:
       SiteA/  IMG_0001.JPG  ...
       SiteB/  ...
 
-The folder name becomes the camera. Capture times are read from EXIF.
-Location and habitat come from a camera file you supply:
+The folder name becomes the camera. Location and habitat come from a camera
+file you supply:
 
     camera_id,latitude,longitude,habitat_type
     SiteA,-2.15,34.80,woodland
@@ -17,9 +17,26 @@ Location and habitat come from a camera file you supply:
 Run with --make-cameras first and the script writes that file for you,
 pre-filled with the camera names it found, so the format cannot be wrong.
 
+Capture times are resolved in this order, and the report says which source
+answered for each image:
+
+    1. --annotations   a COCO Camera Traps JSON, e.g. SnapshotSerengetiS01.json
+    2. --metadata      a CSV of filename,timestamp (and optionally camera)
+    3. EXIF            written by the camera itself
+    4. the file name   e.g. IMG_20240315_093000.jpg
+
+File modification time is deliberately never used: copying a folder resets it,
+so it is always present and almost always wrong.
+
+Either supplied file may also carry species labels. Where it does, they are
+stored as ground truth, which makes detection accuracy measurable instead of
+unverified.
+
 Usage:
     python scripts/ingest_images.py --images photos/ --make-cameras
     python scripts/ingest_images.py --images photos/ --cameras cameras.csv
+    python scripts/ingest_images.py --images photos/ --metadata times.csv
+    python scripts/ingest_images.py --images photos/ --annotations data/SnapshotSerengetiS01.json
     python scripts/ingest_images.py --images photos/ --cameras cameras.csv --prepare
     python scripts/ingest_images.py --images photos/ --cameras cameras.csv --dry-run
 """
@@ -36,9 +53,9 @@ from wildlife_monitor.data.cameras import (
 )
 from wildlife_monitor.data.ingestion import ImageIngestor, discover_cameras
 from wildlife_monitor.data.preparation import ImagePreparer
-from wildlife_monitor.data.sufficiency import assess, guidance_for
+from wildlife_monitor.data.timestamps import build_resolver
 from wildlife_monitor.data.validator import ImageValidator
-from wildlife_monitor.db import init_db, load_detections
+from wildlife_monitor.db import init_db
 
 DEFAULT_CAMERAS = DATA_DIR / "cameras.csv"
 
@@ -74,6 +91,17 @@ def main() -> None:
     parser.add_argument("--allow-upscale", action="store_true",
                         help="also enlarge undersized images. This adds no "
                              "detail; such images are flagged in the database")
+    parser.add_argument("--metadata",
+                        help="CSV of filename,timestamp (optionally camera and "
+                             "species) — takes precedence over EXIF")
+    parser.add_argument("--annotations",
+                        help="COCO Camera Traps JSON, e.g. "
+                             "SnapshotSerengetiS01.json — highest precedence, "
+                             "and supplies species labels where it has them")
+    parser.add_argument("--dates-from-filenames", action="store_true",
+                        help="accept a date with no time of day from the file "
+                             "name. Gives seasonal coverage but records "
+                             "midnight, so day/night timing will be wrong")
     parser.add_argument("--min-width", type=int, default=640)
     parser.add_argument("--min-height", type=int, default=480)
     parser.add_argument("--dry-run", action="store_true",
@@ -118,8 +146,17 @@ def main() -> None:
                                   allow_upscale=args.allow_upscale)
         print(f"[INFO] Preparation enabled: {preparer.description}")
 
+    resolver = build_resolver(annotations=args.annotations,
+                              metadata=args.metadata,
+                              validator=validator,
+                              accept_date_only=args.dates_from_filenames)
+    print(f"[INFO] {resolver.describe_chain()}")
+    for report_line in resolver.source_reports():
+        level = "INFO" if report_line.usable else "WARN"
+        print(f"[{level}] {report_line.summary_line()}")
+
     init_db()
-    report = ImageIngestor(validator, preparer).ingest(
+    report = ImageIngestor(validator, preparer, resolver=resolver).ingest(
         root, registry, dry_run=args.dry_run)
 
     print(f"\n{'[DRY RUN] ' if args.dry_run else ''}{report.summary_line()}")
@@ -144,14 +181,26 @@ def main() -> None:
               f"these will be no better than at their original size. They are "
               f"flagged in the database so their results stay identifiable.")
 
-    if report.undated:
-        print(f"\n[NOTE] {report.undated} image(s) had no EXIF capture time. "
-              f"Behavioural analysis needs timestamps, so those images can be "
-              f"classified but not used for behaviour.")
+    if report.timestamp_sources:
+        print(f"\n{report.timestamp_line()}")
+
+    for note in report.timestamp_notes:
+        print(f"\n[NOTE] {note}")
+
+    if report.labelled:
+        print(f"\n[OK]   {report.labelled:,} image(s) carry a species label "
+              f"from the file you supplied. These are stored as ground truth, "
+              f"so Image Review will report measured accuracy rather than "
+              f"showing the detections as unverified.")
 
     if not args.dry_run and report.ingested:
         print("\nNext: identify the species in these images with")
         print("      python scripts/classify_images.py --all")
+        if report.undated and not (args.metadata or args.annotations):
+            print("\n      To recover the undated images, supply their capture "
+                  "times as a CSV:")
+            print("      python scripts/ingest_images.py --images "
+                  f"{root} --metadata times.csv")
 
 
 if __name__ == "__main__":
