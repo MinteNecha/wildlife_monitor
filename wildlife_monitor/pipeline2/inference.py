@@ -33,6 +33,11 @@ from wildlife_monitor.pipeline2.sequence_builder import (
 )
 
 BEHAVIOUR_DIR = MODELS_DIR / "behaviour"
+
+# Checkpoint name for the model trained across several species at once. It is
+# not a species, so it cannot collide with a real one, and it gives the
+# fallback below a fixed place to look.
+CROSS_SPECIES_KEY = "_cross_species"
 ARCHITECTURE_LABELS = {"lstm": "LSTM", "transformer": "Transformer"}
 
 
@@ -84,14 +89,30 @@ def available_checkpoints() -> list[dict[str, str]]:
         stem = path.stem
         architecture = stem.rsplit("_", 1)[-1] if "_" in stem else ""
         species = stem[: -(len(architecture) + 1)] if architecture else stem
+        cross = species == CROSS_SPECIES_KEY
         found.append({
             "species": species,
+            "label": "all species (cross-species)" if cross else species,
+            "cross_species": cross,
             "architecture": architecture,
             "path": str(path),
             "trained_at": datetime.fromtimestamp(
                 path.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         })
     return found
+
+
+def species_with_models(architecture: str = "") -> list[str]:
+    """Species that have a model of their own, excluding the pooled one."""
+    return sorted({entry["species"] for entry in available_checkpoints()
+                   if not entry["cross_species"]
+                   and (not architecture
+                        or entry["architecture"] == architecture.lower())})
+
+
+def cross_species_available(architecture: str = "lstm") -> bool:
+    """Whether a cross-species model has been trained."""
+    return checkpoint_path(CROSS_SPECIES_KEY, architecture).exists()
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -107,20 +128,89 @@ class BehaviourService:
         self.model = model
         self.metadata = metadata
         self.max_length = int(metadata.get("max_length", 40))
+        # Set by load_for when a cross-species model stands in for a species
+        # that has no model of its own.
+        self.applied_to = ""
 
     @classmethod
     def load(cls, species: str, architecture: str = "lstm") -> "BehaviourService":
-        """Load the checkpoint for one species and architecture."""
+        """Load the checkpoint for one species and architecture.
+
+        Raises ``FileNotFoundError`` when that species has no trained model.
+        Use :meth:`load_for` to fall back to the cross-species model instead.
+        """
         model, metadata = load_checkpoint(checkpoint_path(species, architecture))
         return cls(model, metadata)
+
+    @classmethod
+    def load_for(cls, species: str, architecture: str = "lstm"
+                 ) -> "BehaviourService":
+        """The best available model for a species, preferring its own.
+
+        A model trained on this species is used when one exists, because it has
+        seen this animal and will be more accurate. Otherwise the cross-species
+        model is used, which has never seen this animal but has learned the
+        shape of a detection history from others.
+
+        Without this fallback an ecologist uploading a species the project
+        never trained on gets nothing at all from the behavioural page.
+        """
+        try:
+            return cls.load(species, architecture)
+        except (FileNotFoundError, OSError):
+            service = cls.load(CROSS_SPECIES_KEY, architecture)
+            service.applied_to = species
+            return service
+
+    @property
+    def is_cross_species(self) -> bool:
+        """True when this model was trained across several species."""
+        return bool(self.metadata.get("cross_species"))
+
+    @property
+    def trained_species(self) -> list[str]:
+        """Which species this model was trained on."""
+        if self.is_cross_species:
+            return [str(name) for name in
+                    self.metadata.get("trained_species", [])]
+        species = str(self.metadata.get("species", ""))
+        return [species] if species else []
+
+    def saw_species(self, species: str) -> bool:
+        """Whether this model was trained on the named species."""
+        wanted = str(species).strip().lower()
+        return any(wanted == name.strip().lower()
+                   for name in self.trained_species)
+
+    def provenance(self, species: str = "") -> str:
+        """One plain sentence saying which model answered, and what that means.
+
+        Shown next to predictions so a reader is never left guessing whether a
+        classification came from a model that had seen this animal before.
+        """
+        target = species or getattr(self, "applied_to", "")
+        if not self.is_cross_species:
+            return (f"Trained on {self.trained_species[0]} detections."
+                    if self.trained_species else "Trained on this species.")
+
+        trained = ", ".join(self.trained_species) or "several species"
+        if target and not self.saw_species(target):
+            return (f"Trained on {trained}, and applied here to {target}, "
+                    f"which it has never seen. Expect lower accuracy than for "
+                    f"a species with its own trained model.")
+        return f"Trained across {trained}."
 
     @property
     def model_version(self) -> str:
         """Short provenance string shown next to every prediction."""
         architecture = self.metadata.get("architecture", "")
         label = ARCHITECTURE_LABELS.get(architecture, architecture or "model")
-        species = self.metadata.get("species", "")
         trained = str(self.metadata.get("trained_at", ""))[:10]
+        if self.is_cross_species:
+            count = len(self.trained_species)
+            species = f"cross-species ({count})" if count else "cross-species"
+        else:
+            species = self.metadata.get("species", "")
         return f"{label} · {species} · {trained}".strip(" ·")
 
     def predict(self, detections: pd.DataFrame,

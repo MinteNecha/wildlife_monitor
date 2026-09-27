@@ -27,7 +27,8 @@ from wildlife_monitor.pipeline2.sequence_builder import SequenceBuilder
 # Re-exported for callers that historically imported them from this module.
 __all__ = [
     "ACTIVITY_CLASSES", "MOVEMENT_CLASSES", "ACTIVITY_TO_IDX", "MOVEMENT_TO_IDX",
-    "build_training_set", "split_train_test", "examples_to_tensors",
+    "build_training_set", "build_cross_species_set", "split_train_test",
+    "split_by_species", "leave_one_species_out", "examples_to_tensors",
     "train_model", "evaluate_model", "confusion_matrix", "per_class_recall",
 ]
 
@@ -55,6 +56,7 @@ def build_training_set(source, max_length: int = 40,
             stats["temporal_concentration"], stats["detection_counts"])
         examples.append({
             "camera_id": sequence.camera_id,
+            "species": species,
             "vectors": sequence.vectors,
             "real_length": sequence.real_length,
             "detection_count": sequence.detection_count,
@@ -68,11 +70,72 @@ def build_training_set(source, max_length: int = 40,
     return examples
 
 
+def build_cross_species_set(sources: dict, max_length: int = 40) -> list[dict]:
+    """Pool labelled examples from several species into one training set.
+
+    ``sources`` maps a species name to its detections frame or CSV path.
+
+    Labels are computed **per species, before pooling**. This matters. Both
+    movement statistics are compared against ``quantile(0.75)`` of the other
+    cameras, so pooling the frames first would compute that quantile across a
+    mixture of animals and silently relabel every camera. Computing per species
+    and then pooling keeps every label identical to the per-species runs, which
+    is what makes the two sets of results comparable.
+    """
+    examples: list[dict] = []
+    for species in sorted(sources):
+        for example in build_training_set(sources[species], max_length,
+                                           species=species):
+            example.setdefault("species", species)
+            examples.append(example)
+    return examples
+
+
+def species_in(examples) -> list[str]:
+    """Every species present in a pooled example set, in a stable order."""
+    return sorted({str(example.get("species", "")) for example in examples}
+                  - {""})
+
+
 def split_train_test(examples, test_fraction=0.2, seed=42):
+    """Split by camera. Test cameras are unseen sites of a *known* species."""
     shuffled = examples.copy()
     random.Random(seed).shuffle(shuffled)
     num_test = max(1, round(len(shuffled) * test_fraction))
     return shuffled[num_test:], shuffled[:num_test]
+
+
+def split_by_species(examples, held_out) -> tuple[list[dict], list[dict]]:
+    """Split by species. Test examples are of a species never trained on.
+
+    This is a strictly harder test than :func:`split_train_test`. There, the
+    model has seen the same animal at other sites. Here it has never seen the
+    animal at all, so anything it gets right came from the shape of the
+    detection history rather than from memorising one species.
+    """
+    if isinstance(held_out, str):
+        held_out = [held_out]
+    excluded = {str(name).strip().lower() for name in held_out}
+
+    train, test = [], []
+    for example in examples:
+        species = str(example.get("species", "")).strip().lower()
+        (test if species in excluded else train).append(example)
+    return train, test
+
+
+def leave_one_species_out(examples):
+    """Yield ``(held_out_species, train, test)`` once per species.
+
+    With only a handful of species a single held-out split rests on whichever
+    species happens to be chosen. Rotating through all of them gives one
+    generalisation result per species instead of one overall, which is both
+    more informative and harder to get lucky on.
+    """
+    for species in species_in(examples):
+        train, test = split_by_species(examples, species)
+        if train and test:
+            yield species, train, test
 
 
 def examples_to_tensors(examples):
