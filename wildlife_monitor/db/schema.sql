@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS Image (
     file_path       TEXT NOT NULL,
     width           INTEGER,
     height          INTEGER,
-    ground_truth_id INTEGER REFERENCES Species(species_id)
+    ground_truth_id INTEGER REFERENCES Species(species_id),
+    -- Preparation provenance. 'upscaled' matters because enlarging an image
+    -- lets it pass the resolution check without adding any detail, so results
+    -- from such an image must remain identifiable afterwards.
+    prepared        INTEGER DEFAULT 0,
+    upscaled        INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS Pipeline (
@@ -159,6 +164,7 @@ SELECT
     d.detection_quality           AS detection_quality,
     d.instance_count              AS instance_count,
     i.file_path                   AS image_path,
+    COALESCE(i.upscaled, 0)       AS upscaled,
     COALESCE(d.mask_path, '')     AS mask_path,
     COALESCE(d.overlay_path, '')  AS overlay_path,
     COALESCE(g.canonical_name, 'unknown') AS ground_truth_species,
