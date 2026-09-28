@@ -68,8 +68,16 @@ def detection_grid(frame: pd.DataFrame, count: int, per_row: int = 4) -> None:
 
 
 def _detection_tile(row: pd.Series) -> None:
-    """Render one detection thumbnail with its verdict and metadata."""
-    image_path = Path(str(row.get("image_path", "")))
+    """Render one detection thumbnail with its verdict and metadata.
+
+    The overlay is shown when the pipeline drew one, because a reviewer judging
+    a detection needs to see what the model actually found, not the photograph
+    it started from. The raw image is the fallback: the Identify step stores box
+    coordinates but renders no picture.
+    """
+    overlay = Path(str(row.get("overlay_path", "") or ""))
+    image_path = (overlay if overlay.name and overlay.exists()
+                  else Path(str(row.get("image_path", ""))))
     if image_path.exists():
         st.image(Image.open(image_path), width="stretch")
 

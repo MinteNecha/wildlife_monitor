@@ -94,7 +94,7 @@ def _route(page: str, species: str, pipeline: str) -> None:
     elif page == "Image Review":
         review.render(species, pipeline)
     elif page == "Settings":
-        settings.render()
+        settings.render(pipeline)
     elif page == "Export":
         export.render(species)
 

@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from wildlife_monitor.pipeline2.labelling import (
+    ACTIVITY_CLASSES, MOVEMENT_CLASSES,
+)
 streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 AppTest = streamlit_testing.AppTest
 
@@ -120,3 +123,62 @@ def test_a_broken_metadata_file_is_reported_and_the_page_carries_on():
     assert "not valid JSON" in captions
     # The chain drops the unusable file rather than refusing to continue.
     assert "EXIF → file name" in captions
+
+def test_the_settings_page_offers_only_controls_that_take_effect():
+    """Six controls used to write to session state and nowhere else.
+
+    Pinning the widget inventory is what stops one creeping back: a new
+    control here has to be wired to something before this test will pass.
+    """
+    app = open_page("Settings")
+
+    assert [box.label for box in app.selectbox] == [
+        "Species", "Pipeline", "Device"]        # the first two are the sidebar
+    assert [slider.label for slider in app.slider] == ["Confidence threshold"]
+    assert [box.label for box in app.number_input] == ["Images per run"]
+    assert len(app.text_input) == 0
+    assert [radio.label for radio in app.radio] == ["Navigation"]
+
+
+def test_applying_saves_the_three_settings_to_config_json(tmp_path,
+                                                          monkeypatch):
+    from wildlife_monitor.config import settings as config_settings
+
+    monkeypatch.setattr(config_settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(config_settings.SystemConfig, "_instance", None)
+
+    app = open_page("Settings")
+    app.slider[0].set_value(0.65).run()
+    app.button(key="apply_config").click().run()
+    assert not app.exception
+
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert saved["confidence_threshold"] == pytest.approx(0.65)
+    assert set(saved) == {"device", "confidence_threshold", "top_n"}
+
+
+def test_the_fixed_panel_states_the_classes_the_code_actually_uses():
+    """Read from labelling.py, so the page cannot drift from the taxonomy."""
+    app = open_page("Settings")
+    table = app.dataframe[0].value.set_index("Setting")
+
+    assert table.loc["Activity classes", "Value"] == ", ".join(ACTIVITY_CLASSES)
+    assert table.loc["Movement classes", "Value"] == ", ".join(MOVEMENT_CLASSES)
+    assert table.loc["Territorial cameras", "Value"] == (
+        "top 25% of cameras by site fidelity")
+
+
+def test_an_out_of_range_value_is_rejected_with_its_valid_range():
+    """FR9 and the UC8 alternative flow.
+
+    The widgets clamp their own ranges, so this path is not reachable by
+    clicking. It is reachable by a caller, and the message a user would see
+    is the validator's own description, so that wiring is what is checked.
+    """
+    from wildlife_monitor.dashboard.views.settings import _validate
+
+    errors = dict(_validate({"confidence_threshold": 5.0, "top_n": 0,
+                             "device": "tpu"}))
+    assert "between 0.0 and 1.0" in errors["Confidence threshold"]
+    assert "between 1 and 5000" in errors["Images per run"]
+    assert "cuda, cpu" in errors["Device"]

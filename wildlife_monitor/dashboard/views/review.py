@@ -30,11 +30,7 @@ from wildlife_monitor.dashboard.components import (
 from wildlife_monitor.dashboard.theme import BLACK, GREY
 
 _BAND_ORDER = ["low", "medium", "high"]
-_BAND_HELP = {
-    "low": "The model was unsure. These are the images worth checking first.",
-    "medium": "Moderate confidence — a quick look is usually enough.",
-    "high": "The model was confident. Spot-check rather than review in full.",
-}
+
 
 
 def render(species: str, pipeline: str) -> None:
@@ -58,26 +54,14 @@ def _render_detections(species: str, pipeline: str) -> None:
     _band_summary(frame)
     rule()
 
-    left, right = st.columns([2, 2])
-    with left:
-        chosen = st.multiselect(
-            "Confidence bands", _BAND_ORDER, default=["low"],
-            format_func=lambda band: f"{da.band_label(band)} "
-                                      f"({int((frame['band'] == band).sum())})")
-    with right:
-        order = st.selectbox("Order", ["Least confident first",
-                                        "Most confident first"])
+    order = st.selectbox("Order", ["Least confident first",
+                                    "Most confident first"])
+    subset = frame.sort_values("confidence",
+                               ascending=order.startswith("Least"))
+    st.caption("Least confident first puts the detections the model was "
+               "unsure about at the top. Those are the ones worth checking, "
+               "and reviewing them is how ground truth gets created.")
 
-    if not chosen:
-        st.info("Select at least one confidence band.")
-        return
-
-    subset = frame[frame["band"].isin(chosen)].sort_values(
-        "confidence", ascending=order.startswith("Least"))
-
-    for band in chosen:
-        if band in _BAND_HELP and len(chosen) == 1:
-            st.caption(_BAND_HELP[band])
 
     st.markdown(
         f"<div style='font-size:13px;color:{BLACK};margin-bottom:10px'>"
