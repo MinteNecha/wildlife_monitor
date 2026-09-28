@@ -376,7 +376,49 @@ animal.
 
 ---
 
-## 12. Interpreting the accuracy figures
+## 12. Counting cameras up into species statements
+
+Every accuracy figure in this document measures agreement with the project's
+own quartile rule. None of them check the system against real animals. VL2
+asks for that check: "diurnal/nocturnal classifications match known species
+ecology (e.g. lions are nocturnal; giraffes are diurnal)".
+
+The obstacle is a mismatch of units. The model predicts per camera, because
+that is where the data is and because "is this site a corridor or a home
+range" is a question no textbook answers. Published ecology is written about
+species. `wildlife_monitor/pipeline2/aggregate.py` bridges the two by counting
+each species' camera classifications into one label.
+
+**What it deliberately does not do.** It holds no literature and makes no
+comparison. Which source is authoritative for a species is a judgement for the
+ecologist, and a system that graded itself against a hard-coded table would
+look like validation without being it.
+`test_the_module_never_claims_agreement_with_literature` asserts that no such
+table creeps in later.
+
+**Three ways a count could mislead, and what stops each.**
+
+| Risk | Guard |
+|---|---|
+| A 40% majority read as a finding | A label must hold 50% of the vote and lead by 15 points before it is called clear; otherwise the result reads `split` |
+| A camera with two detections voting on day-or-night | Cameras below five detections are excluded and the exclusion is stated |
+| A stray or empty label winning by frequency | Only the defined classes are counted |
+
+**Model against rule.** The rule labels are summarised beside the predictions.
+Where the two agree, a mismatch with published ecology points at the labelling
+rule. Where they disagree, it points at the model. Without that column a
+mismatch is uninterpretable.
+
+**An early observation.** On a trial run, activity recovered the expected
+pattern cleanly, while movement came out `split` at roughly 35% for every
+species. That is the quartile rule doing what section 7 describes: forcing
+about a third of cameras into each class regardless of the animal. The
+aggregation surfaces that as a refusal to make a claim rather than as a
+confident wrong answer, which is the behaviour intended.
+
+---
+
+## 13. Interpreting the accuracy figures
 
 Two caveats apply to every number in this document.
 

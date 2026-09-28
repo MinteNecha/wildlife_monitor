@@ -58,6 +58,7 @@ wildlife_monitor/
                  models.py            BehaviourModel + LSTM + Transformer — FR5
                  train.py             training loop and metrics
                  inference.py         BehaviourService — serving predictions
+                 aggregate.py         camera votes rolled up per species
                  query.py             QueryEngine — FR6 rule-based NL parsing
                  validation.py        PatternValidator — FR7 ecologist verdicts
     dashboard/   app.py, theme.py, components.py, data_access.py
@@ -68,7 +69,7 @@ wildlife_monitor/
                  ingest_images.py classify_images.py
                  run_pipeline.py run_compare.py train_behaviour.py
                  evaluate.py evaluate_counts.py compare_models.py
-  tests/         pytest suite (231 tests)
+  tests/         pytest suite (253 tests)
   data/          wildlife.db, subset metadata, images
   models/        detector checkpoints + behaviour/*.npz
   results/       overlays, masks, comparison reports, behaviour metrics
@@ -112,6 +113,9 @@ python scripts/train_behaviour.py --all --model transformer
 
 # Pipeline 2 — one model across species, tested on species it never saw
 python scripts/train_cross_species.py --all --model lstm
+
+# Roll the camera classifications up into one statement per species
+python scripts/species_summary.py --all --model lstm
 
 # Dashboard
 streamlit run wildlife_monitor/dashboard/app.py
