@@ -367,6 +367,25 @@ from a quantile rule computed within each species, this measures whether the
 rule's *shape* transfers across species, not whether real animal behaviour
 does. That is a narrower claim than the accuracy figure suggests.
 
+**Two confounds in the comparison, both recorded here because they are easy
+to miss.** The cross-species result is not directly comparable with the
+per-species one until both are controlled.
+
+*Optimiser updates.* Per-species training is full-batch over about 100
+cameras, so 100 epochs is 100 weight updates. Cross-species training uses
+mini-batches of 32 over about 500 cameras, so the same 100 epochs is roughly
+1,600 updates. The cross-species model therefore receives sixteen times more
+optimisation, and some of any advantage it shows is that rather than
+generalisation. `train_behaviour.py` now accepts `--batch-size` so both can
+be run with the same batching when the comparison is made.
+
+*Baseline.* Movement labels are imbalanced: on the pooled set, nomadic is
+55.6% of cameras against migratory at 20.1%. Comparing accuracy against
+uniform chance of 33.3% therefore flatters the result by more than twenty
+points. The script now reports the majority-class baseline per fold, which is
+the score a model gets by always guessing the commonest label, and measures
+the margin against that instead.
+
 **Memory.** Training was full-batch: every camera sequence processed
 together, with the autodiff graph holding each intermediate tensor until the
 backward pass finished. At roughly a hundred cameras per species that peaked
