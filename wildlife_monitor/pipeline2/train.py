@@ -27,7 +27,8 @@ from wildlife_monitor.pipeline2.sequence_builder import SequenceBuilder
 # Re-exported for callers that historically imported them from this module.
 __all__ = [
     "ACTIVITY_CLASSES", "MOVEMENT_CLASSES", "ACTIVITY_TO_IDX", "MOVEMENT_TO_IDX",
-    "build_training_set", "build_cross_species_set", "split_train_test",
+    "build_training_set", "build_cross_species_set", "predict_in_chunks",
+    "split_train_test",
     "split_by_species", "leave_one_species_out", "examples_to_tensors",
     "train_model", "evaluate_model", "confusion_matrix", "per_class_recall",
 ]
@@ -147,35 +148,76 @@ def examples_to_tensors(examples):
     return sequences, lengths, activity_idxs, movement_idxs, month_features
 
 
+def _step(model, optimizer, sequences, lengths, activity, movement, months,
+          max_grad_norm: float):
+    """One forward, backward and parameter update. Returns the three losses."""
+    optimizer.zero_grad()
+    activity_logits, movement_logits = model.forward(
+        sequences, lengths, months, training=True)
+    activity_loss = softmax_cross_entropy(activity_logits, activity)
+    movement_loss = softmax_cross_entropy(movement_logits, movement)
+    total_loss = activity_loss + movement_loss
+    total_loss.backward()
+    clip_grad_norm(model.parameters(), max_grad_norm)
+    optimizer.step()
+    return (float(total_loss.data), float(activity_loss.data),
+            float(movement_loss.data))
+
+
 def train_model(model, train_sequences, train_lengths, train_activity, train_movement,
                  train_month_features, num_epochs=100, learning_rate=0.001,
-                 max_grad_norm=5.0, verbose=True):
-    """Full-batch training over every camera sequence, for ``num_epochs``."""
+                 max_grad_norm=5.0, verbose=True, batch_size=None, seed=42):
+    """Train for ``num_epochs``, full-batch by default.
+
+    ``batch_size`` splits each epoch into mini-batches instead. This matters
+    for memory rather than for optimisation. The autodiff graph holds every
+    intermediate tensor until the backward pass completes, and its size grows
+    with the number of sequences processed together. Pooling five species
+    raises that count from roughly a hundred cameras to several hundred, which
+    is enough to exhaust memory on a laptop.
+
+    The default stays ``None`` so single-species runs behave exactly as before
+    and their published results remain reproducible.
+    """
     optimizer = Adam(model.parameters(), lr=learning_rate)
     history = []
+    total_examples = len(train_sequences)
+    batching = bool(batch_size) and batch_size < total_examples
+    generator = np.random.default_rng(seed)
+
     for epoch in range(num_epochs):
-        optimizer.zero_grad()
-        activity_logits, movement_logits = model.forward(
-            train_sequences, train_lengths, train_month_features, training=True)
-        activity_loss = softmax_cross_entropy(activity_logits, train_activity)
-        movement_loss = softmax_cross_entropy(movement_logits, train_movement)
-        total_loss = activity_loss + movement_loss
-        total_loss.backward()
-        clip_grad_norm(model.parameters(), max_grad_norm)
-        optimizer.step()
+        if not batching:
+            loss, activity_loss, movement_loss = _step(
+                model, optimizer, train_sequences, train_lengths,
+                train_activity, train_movement, train_month_features,
+                max_grad_norm)
+        else:
+            order = generator.permutation(total_examples)
+            loss = activity_loss = movement_loss = 0.0
+            for start in range(0, total_examples, batch_size):
+                rows = order[start:start + batch_size]
+                share = len(rows) / total_examples
+                batch_loss, batch_activity, batch_movement = _step(
+                    model, optimizer, train_sequences[rows],
+                    train_lengths[rows], train_activity[rows],
+                    train_movement[rows], train_month_features[rows],
+                    max_grad_norm)
+                loss += batch_loss * share
+                activity_loss += batch_activity * share
+                movement_loss += batch_movement * share
 
         history.append({
             "epoch": epoch + 1,
-            "loss": float(total_loss.data),
-            "activity_loss": float(activity_loss.data),
-            "movement_loss": float(movement_loss.data),
+            "loss": loss,
+            "activity_loss": activity_loss,
+            "movement_loss": movement_loss,
         })
         if (epoch + 1) % 10 == 0:
             if verbose:
                 print(f"  Epoch {epoch + 1:>3}/{num_epochs}  "
-                      f"loss={total_loss.data:.4f}  "
-                      f"(activity={activity_loss.data:.4f}, "
-                      f"movement={movement_loss.data:.4f})")
+                      f"loss={loss:.4f}  "
+                      f"(activity={activity_loss:.4f}, "
+                      f"movement={movement_loss:.4f})")
             gc.collect()
 
     model.training_history = history
@@ -204,13 +246,33 @@ def per_class_recall(matrix: np.ndarray, classes: list[str]) -> dict[str, dict]:
     return report
 
 
+def predict_in_chunks(model, sequences, lengths, months,
+                      chunk_size: int = 64) -> tuple[np.ndarray, np.ndarray]:
+    """Forward pass in chunks, returning raw logits.
+
+    A forward pass builds the same autodiff graph whether or not a backward
+    pass follows, so evaluating a whole held-out species at once costs as much
+    memory as training on it. Chunking keeps the peak bounded.
+    """
+    activity_parts, movement_parts = [], []
+    for start in range(0, len(sequences), chunk_size):
+        stop = start + chunk_size
+        activity_logits, movement_logits = model.forward(
+            sequences[start:stop], lengths[start:stop], months[start:stop],
+            training=False)
+        activity_parts.append(np.asarray(activity_logits.data))
+        movement_parts.append(np.asarray(movement_logits.data))
+        gc.collect()
+    return np.concatenate(activity_parts), np.concatenate(movement_parts)
+
+
 def evaluate_model(model, test_sequences, test_lengths, test_activity, test_movement,
-                    test_month_features, verbose=True) -> dict:
+                    test_month_features, verbose=True, chunk_size=64) -> dict:
     """Evaluate on held-out cameras and return a full metrics dictionary."""
-    activity_logits, movement_logits = model.forward(
-        test_sequences, test_lengths, test_month_features, training=False)
-    activity_preds = np.argmax(activity_logits.data, axis=1)
-    movement_preds = np.argmax(movement_logits.data, axis=1)
+    activity_data, movement_data = predict_in_chunks(
+        model, test_sequences, test_lengths, test_month_features, chunk_size)
+    activity_preds = np.argmax(activity_data, axis=1)
+    movement_preds = np.argmax(movement_data, axis=1)
 
     if verbose:
         print("Activity predictions vs true labels:")
