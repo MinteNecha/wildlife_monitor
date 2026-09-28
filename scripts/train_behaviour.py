@@ -48,7 +48,8 @@ def _store_patterns(species: str, architecture: str, frame) -> int:
 
 
 def train_one(species: str, architecture: str, pipeline: str, max_length: int,
-              epochs: int | None, learning_rate: float, seed: int) -> dict:
+              epochs: int | None, learning_rate: float, seed: int,
+              batch_size: int | None = None) -> dict:
     frame, source = load_species_detections(species, pipeline)
     np.random.seed(seed)
     epochs = epochs or DEFAULT_EPOCHS.get(architecture, 100)
@@ -71,7 +72,7 @@ def train_one(species: str, architecture: str, pipeline: str, max_length: int,
           f"{species} camera sequences...")
     train_model(model, train_sequences, train_lengths, train_activity,
                 train_movement, train_months, num_epochs=epochs,
-                learning_rate=learning_rate)
+                learning_rate=learning_rate, batch_size=batch_size)
 
     print("\n" + "=" * 60)
     print(f"Evaluating on {len(test_examples)} held-out cameras "
@@ -94,6 +95,7 @@ def train_one(species: str, architecture: str, pipeline: str, max_length: int,
         "epochs": epochs,
         "learning_rate": learning_rate,
         "seed": seed,
+        "batch_size": batch_size,
         "trained_at": datetime.now().isoformat(timespec="seconds"),
         "train_cameras": len(train_examples),
         "test_cameras": len(test_examples),
@@ -131,6 +133,13 @@ def main() -> None:
                         help="defaults to 100 (LSTM) or 40 (Transformer)")
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-size", type=int,
+                        help="train on this many camera sequences at a time. "
+                             "Omit for full-batch, which is the default and "
+                             "reproduces earlier results exactly. Set it to "
+                             "match a cross-species run when comparing the "
+                             "two, since mini-batching changes how many "
+                             "weight updates each epoch performs")
     args = parser.parse_args()
 
     BEHAVIOUR_DIR.mkdir(parents=True, exist_ok=True)
@@ -160,7 +169,7 @@ def main() -> None:
         try:
             summaries.append(train_one(species, args.model, args.pipeline,
                                         args.max_length, args.epochs,
-                                        args.lr, args.seed))
+                                        args.lr, args.seed, args.batch_size))
         except FileNotFoundError as error:
             print(f"[SKIP] {error}")
 
