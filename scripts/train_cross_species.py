@@ -65,8 +65,27 @@ from wildlife_monitor.pipeline2.train import (
     split_by_species, train_model,
 )
 
-# Three movement classes, so a model that guesses would land near this.
+# Uniform chance across three classes. This is the weaker of the two
+# baselines and is reported only for reference.
 CHANCE = 100.0 / len(MOVEMENT_CLASSES)
+
+
+def majority_baseline(examples) -> tuple[str, float]:
+    """The score a model gets by always guessing the commonest class.
+
+    Movement labels are heavily imbalanced, with nomadic roughly half of all
+    cameras. Comparing against uniform chance therefore flatters the result:
+    the honest question is whether the model beats simply guessing the
+    commonest label, not whether it beats a coin toss between three.
+    """
+    if not examples:
+        return "", 0.0
+    counts: dict[str, int] = {}
+    for example in examples:
+        label = example["movement_label"]
+        counts[label] = counts.get(label, 0) + 1
+    label = max(counts, key=lambda name: counts[name])
+    return label, 100.0 * counts[label] / len(examples)
 
 
 def fit(train_examples, architecture: str, max_length: int, epochs: int,
@@ -102,13 +121,17 @@ def run_fold(held_out: str, train_examples, test_examples, architecture: str,
     metrics = evaluate_model(model, sequences, lengths, activity, movement,
                              months, verbose=False)
 
+    baseline_label, baseline = majority_baseline(test_examples)
     print(f"  {'':<27} test  {len(test_examples):>4} cameras  "
           f"activity {metrics['activity_accuracy']:>5.1f}%  "
-          f"movement {metrics['movement_accuracy']:>5.1f}%")
+          f"movement {metrics['movement_accuracy']:>5.1f}%  "
+          f"(always-{baseline_label} would score {baseline:.1f}%)")
     return {"held_out_species": held_out,
             "train_cameras": len(train_examples),
             "train_species": species_in(train_examples),
             "test_cameras": len(test_examples),
+            "majority_class": baseline_label,
+            "majority_baseline": round(baseline, 2),
             **metrics}
 
 
@@ -117,38 +140,47 @@ def summarise(folds: list[dict]) -> None:
     print("\n" + "=" * 72)
     print("GENERALISATION TO UNSEEN SPECIES")
     print("=" * 72)
-    print(f"{'Held-out species':<20}{'Test cams':>10}{'Activity':>11}"
-          f"{'Movement':>11}{'vs chance':>12}")
+    print(f"{'Held-out species':<18}{'Test cams':>10}{'Activity':>10}"
+          f"{'Movement':>10}{'Majority':>10}{'vs majority':>13}")
     print("-" * 72)
     for fold in folds:
-        gap = fold["movement_accuracy"] - CHANCE
-        print(f"{fold['held_out_species']:<20}{fold['test_cameras']:>10}"
-              f"{fold['activity_accuracy']:>10.1f}%"
-              f"{fold['movement_accuracy']:>10.1f}%"
-              f"{gap:>+11.1f}")
+        gap = fold["movement_accuracy"] - fold["majority_baseline"]
+        print(f"{fold['held_out_species']:<18}{fold['test_cameras']:>10}"
+              f"{fold['activity_accuracy']:>9.1f}%"
+              f"{fold['movement_accuracy']:>9.1f}%"
+              f"{fold['majority_baseline']:>9.1f}%"
+              f"{gap:>+12.1f}")
 
     movement = [f["movement_accuracy"] for f in folds]
     activity = [f["activity_accuracy"] for f in folds]
+    baselines = [f["majority_baseline"] for f in folds]
     mean_movement = sum(movement) / len(movement)
+    mean_baseline = sum(baselines) / len(baselines)
     print("-" * 72)
-    print(f"{'mean':<20}{'':>10}{sum(activity)/len(activity):>10.1f}%"
-          f"{mean_movement:>10.1f}%{mean_movement - CHANCE:>+11.1f}")
-    print(f"{'range':<20}{'':>10}{'':>11}"
-          f"{min(movement):>6.1f} to {max(movement):<5.1f}")
+    print(f"{'mean':<18}{'':>10}{sum(activity)/len(activity):>9.1f}%"
+          f"{mean_movement:>9.1f}%{mean_baseline:>9.1f}%"
+          f"{mean_movement - mean_baseline:>+12.1f}")
+    print(f"{'range':<18}{'':>10}{'':>10}"
+          f"{min(movement):>5.1f} to {max(movement):<4.1f}")
+    print(f"\n'Majority' is the score from always guessing the commonest class "
+          f"in that\ntest set. It is the baseline that matters, because the "
+          f"movement labels are\nimbalanced. Uniform chance would be "
+          f"{CHANCE:.1f}%, which flatters the result.")
 
     print()
-    if mean_movement >= 70:
+    if mean_movement >= mean_baseline + 15:
         print("Reading: movement classification transfers to species the model")
-        print("has never seen. The model learned the shape of a detection")
-        print("history rather than the identity of one animal.")
-    elif mean_movement >= CHANCE + 10:
+        print("has never seen, and clearly beats guessing the commonest class.")
+        print("The model learned the shape of a detection history rather than")
+        print("the identity of one animal.")
+    elif mean_movement >= mean_baseline + 5:
         print("Reading: movement classification partly transfers. The model")
-        print("carries some species-independent signal, but well short of its")
-        print("per-species accuracy. Compare the folds below for which species")
-        print("transfer and which do not.")
+        print("beats the majority-class baseline, but not by much. Compare the")
+        print("folds above for which species transfer and which do not.")
     else:
         print(f"Reading: movement classification does not transfer. At "
-              f"{mean_movement:.1f}% against a {CHANCE:.1f}% chance baseline,")
+              f"{mean_movement:.1f}% against a {mean_baseline:.1f}% "
+              f"majority-class baseline,")
         print("the per-species models were learning species-specific patterns")
         print("rather than behaviour. This is a negative result, and it is the")
         print("honest answer to the generalisation question.")
@@ -260,6 +292,8 @@ def main() -> None:
         "batch_size": args.batch_size,
         "evaluated_at": datetime.now().isoformat(timespec="seconds"),
         "chance_baseline": round(CHANCE, 2),
+        "mean_majority_baseline": round(
+            sum(f["majority_baseline"] for f in folds) / len(folds), 2),
         "movement_label_counts": counts,
         "folds": folds,
         "mean_movement_accuracy": round(sum(movement) / len(movement), 2),
