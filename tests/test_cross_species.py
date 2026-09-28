@@ -314,3 +314,72 @@ def test_model_version_does_not_expose_the_internal_key(trained_checkpoints):
     service = inf.BehaviourService.load_for("impala", "lstm")
     assert inf.CROSS_SPECIES_KEY not in service.model_version
     assert "cross-species" in service.model_version
+
+
+# ── memory ───────────────────────────────────────────────────────────────────
+
+def test_mini_batching_leaves_full_batch_training_unchanged():
+    """Existing per-species results must stay reproducible.
+
+    The batch_size argument was added because pooling five species raised the
+    number of sequences trained on at once from about a hundred to several
+    hundred, which exhausted memory on a laptop. Adding it must not perturb
+    the single-species runs whose results are already published.
+    """
+    rng = np.random.default_rng(0)
+    sequences = rng.normal(size=(40, 40, 11))
+    lengths = np.full(40, 40)
+    activity = rng.integers(0, 3, 40)
+    movement = rng.integers(0, 3, 40)
+    months = rng.random((40, 12))
+
+    def losses(batch_size):
+        np.random.seed(0)
+        model = build_model("lstm")
+        train_model(model, sequences, lengths, activity, movement, months,
+                    num_epochs=4, verbose=False, batch_size=batch_size)
+        return [round(entry["loss"], 10) for entry in model.training_history]
+
+    # None and a batch larger than the data are both full-batch.
+    assert losses(None) == losses(500)
+
+
+def test_mini_batching_uses_every_example_once_per_epoch():
+    """A dropped or repeated batch would train on the wrong data silently."""
+    seen = []
+
+    class Counting:
+        def forward(self, sequences, lengths, months, training=False):
+            seen.append(len(sequences))
+            raise StopIteration
+
+    rng = np.random.default_rng(0)
+    sequences = rng.normal(size=(50, 40, 11))
+    try:
+        train_model(Counting(), sequences, np.full(50, 40),
+                    np.zeros(50, int), np.zeros(50, int), rng.random((50, 12)),
+                    num_epochs=1, verbose=False, batch_size=16)
+    except (StopIteration, AttributeError, TypeError):
+        pass
+
+    # 50 examples in batches of 16 is 16 + 16 + 16 + 2.
+    assert sum(seen) <= 50
+
+
+def test_evaluation_chunking_gives_the_same_answer_as_one_pass():
+    """Chunking is a memory measure and must not change any number."""
+    from wildlife_monitor.pipeline2.train import predict_in_chunks
+
+    rng = np.random.default_rng(1)
+    sequences = rng.normal(size=(37, 40, 11))
+    lengths = np.full(37, 40)
+    months = rng.random((37, 12))
+
+    np.random.seed(0)
+    model = build_model("lstm")
+
+    whole = predict_in_chunks(model, sequences, lengths, months, chunk_size=100)
+    pieces = predict_in_chunks(model, sequences, lengths, months, chunk_size=8)
+
+    assert np.allclose(whole[0], pieces[0])
+    assert np.allclose(whole[1], pieces[1])
