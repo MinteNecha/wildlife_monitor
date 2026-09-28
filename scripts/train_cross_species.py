@@ -70,7 +70,7 @@ CHANCE = 100.0 / len(MOVEMENT_CLASSES)
 
 
 def fit(train_examples, architecture: str, max_length: int, epochs: int,
-        learning_rate: float):
+        learning_rate: float, batch_size: int = 32):
     """Build and train one model on the given examples."""
     sequences, lengths, activity, movement, months = examples_to_tensors(
         train_examples)
@@ -81,20 +81,22 @@ def fit(train_examples, architecture: str, max_length: int, epochs: int,
     model = build_model(architecture, **overrides)
 
     train_model(model, sequences, lengths, activity, movement, months,
-                num_epochs=epochs, learning_rate=learning_rate, verbose=False)
+                num_epochs=epochs, learning_rate=learning_rate, verbose=False,
+                batch_size=batch_size)
     return model
 
 
 def run_fold(held_out: str, train_examples, test_examples, architecture: str,
              max_length: int, epochs: int, learning_rate: float,
-             seed: int) -> dict:
+             seed: int, batch_size: int = 32) -> dict:
     """Train without one species, then evaluate on it."""
     np.random.seed(seed)
     print(f"\n  hold out {held_out:<18} "
           f"train {len(train_examples):>4} cameras "
           f"({', '.join(species_in(train_examples))})")
 
-    model = fit(train_examples, architecture, max_length, epochs, learning_rate)
+    model = fit(train_examples, architecture, max_length, epochs,
+                learning_rate, batch_size)
     sequences, lengths, activity, movement, months = examples_to_tensors(
         test_examples)
     metrics = evaluate_model(model, sequences, lengths, activity, movement,
@@ -186,6 +188,10 @@ def main() -> None:
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-size", type=int, default=32,
+                        help="camera sequences trained on at once. Lower this "
+                             "if the run exhausts memory; raise it if you have "
+                             "room to spare (default 64)")
     parser.add_argument("--no-deploy", action="store_true",
                         help="report generalisation only; do not train or save "
                              "the final all-species model")
@@ -216,7 +222,9 @@ def main() -> None:
     print("[INFO] movement labels: " + ", ".join(
         f"{name} {counts.get(name, 0)}" for name in MOVEMENT_CLASSES))
 
-    print(f"\n[INFO] Leave-one-species-out ({args.model}, {epochs} epochs)")
+    steps = max(1, -(-len(examples) // args.batch_size))
+    print(f"\n[INFO] Leave-one-species-out ({args.model}, {epochs} epochs, "
+          f"batch {args.batch_size}, about {steps} updates per epoch)")
     folds = []
     if args.holdout:
         train_examples, test_examples = split_by_species(examples, args.holdout)
@@ -227,13 +235,15 @@ def main() -> None:
             raise SystemExit(1)
         folds.append(run_fold(args.holdout, train_examples, test_examples,
                               args.model, args.max_length, epochs,
-                              args.learning_rate, args.seed))
+                              args.learning_rate, args.seed,
+                              args.batch_size))
     else:
         for held_out, train_examples, test_examples in leave_one_species_out(
                 examples):
             folds.append(run_fold(held_out, train_examples, test_examples,
                                   args.model, args.max_length, epochs,
-                                  args.learning_rate, args.seed))
+                                  args.learning_rate, args.seed,
+                                  args.batch_size))
 
     summarise(folds)
 
@@ -247,6 +257,7 @@ def main() -> None:
         "epochs": epochs,
         "learning_rate": args.learning_rate,
         "seed": args.seed,
+        "batch_size": args.batch_size,
         "evaluated_at": datetime.now().isoformat(timespec="seconds"),
         "chance_baseline": round(CHANCE, 2),
         "movement_label_counts": counts,
@@ -261,7 +272,7 @@ def main() -> None:
               f"{len(species_in(examples))} species")
         np.random.seed(args.seed)
         model = fit(examples, args.model, args.max_length, epochs,
-                    args.learning_rate)
+                    args.learning_rate, args.batch_size)
         metadata = {
             "species": CROSS_SPECIES_KEY,
             "trained_species": species_in(examples),
@@ -271,7 +282,8 @@ def main() -> None:
             "trained_at": datetime.now().isoformat(timespec="seconds"),
             "generalisation": report,
             **{key: report[key] for key in
-               ("pipeline", "max_length", "epochs", "learning_rate", "seed")},
+               ("pipeline", "max_length", "epochs", "learning_rate", "seed",
+                "batch_size")},
         }
         saved = model.save_checkpoint(
             checkpoint_path(CROSS_SPECIES_KEY, args.model), metadata)
