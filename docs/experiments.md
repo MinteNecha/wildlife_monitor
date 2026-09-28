@@ -367,6 +367,29 @@ from a quantile rule computed within each species, this measures whether the
 rule's *shape* transfers across species, not whether real animal behaviour
 does. That is a narrower claim than the accuracy figure suggests.
 
+**Memory.** Training was full-batch: every camera sequence processed
+together, with the autodiff graph holding each intermediate tensor until the
+backward pass finished. At roughly a hundred cameras per species that peaked
+near one gigabyte and went unnoticed. Pooling five species raises it to 512
+cameras, and the peak measured at **5.0 GB**, which exhausts a laptop.
+
+`train_model` now takes an optional `batch_size`. The default stays `None`,
+which is full-batch and bit-identical to every published single-species run;
+`test_mini_batching_leaves_full_batch_training_unchanged` pins that. The
+cross-species script passes 32.
+
+| Batch size | Peak memory, 512 cameras |
+|---|---|
+| full batch (old) | 4,976 MB |
+| 128 | 2,663 MB |
+| 64 | 1,445 MB |
+| 32 | 743 MB |
+
+Evaluation had the same problem for a different reason: a forward pass builds
+the same graph whether or not a backward pass follows, so scoring a held-out
+species of 148 cameras cost as much as training on it. `predict_in_chunks`
+bounds that too, and is asserted to return identical numbers to a single pass.
+
 **Serving consequence.** `BehaviourService.load_for` prefers a species' own
 model and falls back to the cross-species model. Without that fallback an
 ecologist uploading a species the project never trained on gets nothing at all
