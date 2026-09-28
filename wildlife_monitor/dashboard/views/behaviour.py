@@ -88,6 +88,8 @@ def render(species: str) -> None:
     rule()
     _seasonal_profile(species, predictions)
     rule()
+    _species_summary(species, predictions)
+    rule()
     _query_section(species)
     rule()
     _validation_section(species)
@@ -445,6 +447,60 @@ def _validation_section(species: str) -> None:
                                       "verdict": "Verdict", "notes": "Notes",
                                       "validated_at": "Recorded"}),
                          width="stretch", hide_index=True)
+
+
+def _species_summary(species: str, predictions) -> None:
+    """One statement for the species, counted from its cameras (VL2).
+
+    Every other figure on this page measures agreement with the project's own
+    quartile rule. This is the only output that can be checked against
+    published ecology, because ecology is written about species rather than
+    about camera sites.
+    """
+    from wildlife_monitor.pipeline2.aggregate import MIN_DETECTIONS, profile_species
+
+    profile = profile_species(predictions, species)
+    if not profile.cameras_counted:
+        return
+
+    st.subheader("Species-Level Summary")
+    st.caption(f"Each camera votes once. Cameras with fewer than "
+               f"{MIN_DETECTIONS} detections are not counted, because a "
+               f"day-or-night label from two photographs is not evidence.")
+
+    columns = st.columns(3)
+    for column, rollup in zip(columns, (profile.activity, profile.movement,
+                                         profile.social)):
+        column.metric(rollup.dimension,
+                      rollup.label if rollup.clear else "split",
+                      f"{rollup.percentage} of cameras",
+                      delta_color="off")
+
+    unclear = [rollup.dimension for rollup in
+               (profile.activity, profile.movement)
+               if not rollup.clear]
+    if unclear:
+        note(f"No single label is clearly ahead for: "
+             f"{', '.join(unclear).lower()}. The cameras disagree too much "
+             f"for a species-level statement, so do not read one from the "
+             f"leading label alone.", ok=False)
+
+    disagreement = [name for name, agrees
+                    in profile.model_and_rule_agree.items() if not agrees]
+    if disagreement:
+        note(f"The model and the labelling rule give different species-level "
+             f"answers for {', '.join(disagreement)}. If this species "
+             f"disagrees with published ecology, that points at the model. "
+             f"Where they agree, it points at the rule.", ok=False)
+
+    if profile.cameras_excluded:
+        st.caption(f"{profile.cameras_excluded} of {profile.cameras} cameras "
+                   f"were excluded as too thin to vote.")
+
+    st.caption("Compare these against published ecology for this species. "
+               "The system does not make that comparison itself, because "
+               "which source is authoritative is a judgement for the "
+               "ecologist rather than something to hard-code.")
 
 
 def _model_in_use(service, species: str) -> None:
