@@ -26,9 +26,12 @@ from tqdm import tqdm
 
 from wildlife_monitor.config import RESULTS_DIR, SUBSET_CSV, SystemConfig
 from wildlife_monitor.data import load_species_subset
-from wildlife_monitor.db import save_detections
+from wildlife_monitor.db import load_detections, save_detections
 from wildlife_monitor.utils import DetectionRecord, save_overlay
 
+
+
+SAVE_EVERY = 25
 
 class LocalisationResult:
     """The outcome of localising one image."""
@@ -89,12 +92,21 @@ class DetectionPipeline(ABC):
             return pd.DataFrame()
 
         selected = self.select_images(frame, species, top_n)
-        records = self._process(selected, species)
+        stored = load_detections(species, self.name)
+        done = set(stored["image_id"].astype(str)) if not stored.empty else set()
+        todo = selected[~selected["image_id"].astype(str).isin(done)]
+        print(f"[INFO] {self.name}: {len(done)} already stored, "
+              f"{len(todo)} to process.")
+
+        records, written = [], 0
+        for start in range(0, len(todo), SAVE_EVERY):
+            batch = self._process(todo.iloc[start:start + SAVE_EVERY], species)
+            written += save_detections(batch)
+            records.extend(batch)
         if not records:
-            print(f"[WARN] {self.name}: no detections produced for '{species}'.")
+            print(f"[WARN] {self.name}: nothing new for '{species}'.")
             return pd.DataFrame()
 
-        written = save_detections(records)
         self._print_summary(species, written)
         return pd.DataFrame([asdict(record) for record in records])
 
