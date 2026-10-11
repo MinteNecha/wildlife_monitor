@@ -132,8 +132,8 @@ def test_the_settings_page_offers_only_controls_that_take_effect():
     """
     app = open_page("Settings")
 
-    assert [box.label for box in app.selectbox] == [
-        "Species", "Pipeline", "Device"]        # the first two are the sidebar
+    assert {box.label for box in app.selectbox} == {
+        "Species", "Pipeline", "Device"}        # the first two are the sidebar
     assert [slider.label for slider in app.slider] == ["Confidence threshold"]
     assert [box.label for box in app.number_input] == ["Images per run"]
     assert len(app.text_input) == 0

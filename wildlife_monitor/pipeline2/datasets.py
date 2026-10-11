@@ -11,6 +11,7 @@ results.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -25,6 +26,11 @@ DEFAULT_PIPELINE = "bioclip_megadetector"
 DEFAULT_EPOCHS = {"lstm": 100, "transformer": 40}
 
 METRICS_DIR = RESULTS_DIR / "behaviour"
+
+
+def metrics_dir(pipeline: str = DEFAULT_PIPELINE) -> Path:
+    """Where results for models built on one pipeline's detections live."""
+    return METRICS_DIR / pipeline
 
 
 def load_species_detections(species: str,

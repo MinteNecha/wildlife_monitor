@@ -18,3 +18,4 @@ image*
 # SQLite write-ahead log files
 *.db-wal
 *.db-shm
+*.npz

@@ -22,7 +22,7 @@ import numpy as np
 from wildlife_monitor.config import RESULTS_DIR
 from wildlife_monitor.db import database_exists
 from wildlife_monitor.pipeline2.datasets import (
-    DEFAULT_EPOCHS, DEFAULT_PIPELINE, METRICS_DIR, load_species_detections,
+    DEFAULT_EPOCHS, DEFAULT_PIPELINE, load_species_detections, metrics_dir,
 )
 from wildlife_monitor.pipeline2.inference import BEHAVIOUR_DIR, checkpoint_path
 from wildlife_monitor.pipeline2.models import build_model
@@ -34,12 +34,13 @@ from wildlife_monitor.pipeline2.train import (
 
 
 
-def _store_patterns(species: str, architecture: str, frame) -> int:
+def _store_patterns(species: str, architecture: str, pipeline: str,
+                    frame) -> int:
     """Run inference with the just-saved model and persist the patterns."""
     from wildlife_monitor.db import save_patterns
     from wildlife_monitor.pipeline2.inference import BehaviourService
     try:
-        service = BehaviourService.load(species, architecture)
+        service = BehaviourService.load(species, architecture, pipeline)
         patterns = service.predict(frame, species)
         return save_patterns(patterns, service.model_version)
     except Exception as error:
@@ -103,15 +104,16 @@ def train_one(species: str, architecture: str, pipeline: str, max_length: int,
         "metrics": metrics,
     }
 
-    saved = model.save_checkpoint(checkpoint_path(species, architecture), metadata)
+    saved = model.save_checkpoint(
+        checkpoint_path(species, architecture, pipeline), metadata)
 
     # Classify every camera with the freshly trained model and store the
     # patterns, so the query and validation surfaces have something to work
     # against without re-running inference.
-    stored = _store_patterns(species, architecture, frame)
+    stored = _store_patterns(species, architecture, pipeline, frame)
     metadata["patterns_stored"] = stored
-    METRICS_DIR.mkdir(parents=True, exist_ok=True)
-    metrics_path = METRICS_DIR / f"{species}_{architecture}_metrics.json"
+    metrics_path = metrics_dir(pipeline) / f"{species}_{architecture}_metrics.json"
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(json.dumps(metadata, indent=2))
 
     print(f"\n[INFO] Checkpoint -> {saved}")

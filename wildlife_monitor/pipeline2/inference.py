@@ -27,6 +27,7 @@ from wildlife_monitor.config import MODELS_DIR
 from wildlife_monitor.pipeline2.labelling import (
     ACTIVITY_CLASSES, MOVEMENT_CLASSES, classify_activity, classify_movement,
 )
+from wildlife_monitor.pipeline2.datasets import DEFAULT_PIPELINE
 from wildlife_monitor.pipeline2.models import BehaviourModel, load_checkpoint
 from wildlife_monitor.pipeline2.sequence_builder import (
     SequenceBuilder, sequences_to_arrays,
@@ -75,23 +76,30 @@ class BehaviourPattern:
         return asdict(self)
 
 
-def checkpoint_path(species: str, architecture: str) -> Path:
-    """Where the checkpoint for one species/architecture pair lives."""
-    return BEHAVIOUR_DIR / f"{species}_{architecture.lower()}.npz"
+def checkpoint_path(species: str, architecture: str,
+                    pipeline: str = DEFAULT_PIPELINE) -> Path:
+    """Where one species/architecture checkpoint lives, per Pipeline 1 source.
+
+    Each pipeline has its own folder, so a model built on one pipeline's
+    detections can never overwrite a model built on another's.
+    """
+    return BEHAVIOUR_DIR / pipeline / f"{species}_{architecture.lower()}.npz"
 
 
-def available_checkpoints() -> list[dict[str, str]]:
-    """Every trained behaviour checkpoint currently on disk."""
+def available_checkpoints(pipeline: str = "") -> list[dict[str, str]]:
+    """Every trained behaviour checkpoint on disk, optionally for one pipeline."""
     if not BEHAVIOUR_DIR.exists():
         return []
+    pattern = f"{pipeline}/*.npz" if pipeline else "*/*.npz"
     found = []
-    for path in sorted(BEHAVIOUR_DIR.glob("*.npz")):
+    for path in sorted(BEHAVIOUR_DIR.glob(pattern)):
         stem = path.stem
         architecture = stem.rsplit("_", 1)[-1] if "_" in stem else ""
         species = stem[: -(len(architecture) + 1)] if architecture else stem
         cross = species == CROSS_SPECIES_KEY
         found.append({
             "species": species,
+            "pipeline": path.parent.name,
             "label": "all species (cross-species)" if cross else species,
             "cross_species": cross,
             "architecture": architecture,
@@ -102,17 +110,19 @@ def available_checkpoints() -> list[dict[str, str]]:
     return found
 
 
-def species_with_models(architecture: str = "") -> list[str]:
+def species_with_models(architecture: str = "",
+                        pipeline: str = "") -> list[str]:
     """Species that have a model of their own, excluding the pooled one."""
-    return sorted({entry["species"] for entry in available_checkpoints()
+    return sorted({entry["species"] for entry in available_checkpoints(pipeline)
                    if not entry["cross_species"]
                    and (not architecture
                         or entry["architecture"] == architecture.lower())})
 
 
-def cross_species_available(architecture: str = "lstm") -> bool:
-    """Whether a cross-species model has been trained."""
-    return checkpoint_path(CROSS_SPECIES_KEY, architecture).exists()
+def cross_species_available(architecture: str = "lstm",
+                            pipeline: str = DEFAULT_PIPELINE) -> bool:
+    """Whether a cross-species model has been trained on this pipeline."""
+    return checkpoint_path(CROSS_SPECIES_KEY, architecture, pipeline).exists()
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -133,18 +143,20 @@ class BehaviourService:
         self.applied_to = ""
 
     @classmethod
-    def load(cls, species: str, architecture: str = "lstm") -> "BehaviourService":
-        """Load the checkpoint for one species and architecture.
+    def load(cls, species: str, architecture: str = "lstm",
+             pipeline: str = DEFAULT_PIPELINE) -> "BehaviourService":
+        """Load the checkpoint for one species, architecture and pipeline.
 
         Raises ``FileNotFoundError`` when that species has no trained model.
         Use :meth:`load_for` to fall back to the cross-species model instead.
         """
-        model, metadata = load_checkpoint(checkpoint_path(species, architecture))
+        model, metadata = load_checkpoint(
+            checkpoint_path(species, architecture, pipeline))
         return cls(model, metadata)
 
     @classmethod
-    def load_for(cls, species: str, architecture: str = "lstm"
-                 ) -> "BehaviourService":
+    def load_for(cls, species: str, architecture: str = "lstm",
+                 pipeline: str = DEFAULT_PIPELINE) -> "BehaviourService":
         """The best available model for a species, preferring its own.
 
         A model trained on this species is used when one exists, because it has
@@ -156,9 +168,9 @@ class BehaviourService:
         never trained on gets nothing at all from the behavioural page.
         """
         try:
-            return cls.load(species, architecture)
+            return cls.load(species, architecture, pipeline)
         except (FileNotFoundError, OSError):
-            service = cls.load(CROSS_SPECIES_KEY, architecture)
+            service = cls.load(CROSS_SPECIES_KEY, architecture, pipeline)
             service.applied_to = species
             return service
 
@@ -211,7 +223,9 @@ class BehaviourService:
             species = f"cross-species ({count})" if count else "cross-species"
         else:
             species = self.metadata.get("species", "")
-        return f"{label} · {species} · {trained}".strip(" ·")
+        pipeline = str(self.metadata.get("pipeline", ""))
+        return " · ".join(
+            part for part in (label, species, pipeline, trained) if part)
 
     def predict(self, detections: pd.DataFrame,
                 species: str = "") -> list[BehaviourPattern]:

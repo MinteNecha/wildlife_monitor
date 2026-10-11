@@ -37,37 +37,61 @@ CLASS_COLOURS = dict(zip(MOVEMENT_CLASSES, CHART_SEQ))
 
 
 @st.cache_resource(show_spinner=False)
-def _service(species: str, architecture: str):
+def _service(species: str, architecture: str, pipeline: str):
     """Cached model load — a checkpoint should not be re-read on every rerun."""
-    return da.load_behaviour_service(species, architecture)
+    return da.load_behaviour_service(species, architecture, pipeline)
 
 
 @st.cache_data(show_spinner=False)
-def _predictions(species: str, architecture: str) -> pd.DataFrame:
-    service = _service(species, architecture)
+def _predictions(species: str, architecture: str,
+                 pipeline: str) -> pd.DataFrame:
+    service = _service(species, architecture, pipeline)
     if service is None:
         return pd.DataFrame()
-    return service.predict_frame(da.behaviour_detections(species), species)
+    return service.predict_frame(
+        da.behaviour_detections(species, pipeline), species)
+
+
+def _pipeline() -> str:
+    """The Pipeline 1 source chosen on this page."""
+    return st.session_state.get("behaviour_pipeline", da.BEHAVIOUR_PIPELINE)
+
+
+def _pipeline_selector(species: str) -> str:
+    """Pick which Pipeline 1 detections the behaviour model was built on."""
+    pipelines = da.behaviour_pipelines(species)
+    if len(pipelines) < 2:
+        choice = pipelines[0] if pipelines else da.BEHAVIOUR_PIPELINE
+        st.caption(f"Built on {da.pipeline_label(choice)} detections.")
+    else:
+        current = st.session_state.get("behaviour_pipeline")
+        index = pipelines.index(current) if current in pipelines else 0
+        choice = st.radio(
+            "Pipeline 1 detections", pipelines, index=index,
+            horizontal=True, format_func=da.pipeline_label)
+    st.session_state["behaviour_pipeline"] = choice
+    return choice
 
 
 def render(species: str) -> None:
     header("Behavioural Analysis",
            "Pipeline 2 · temporal behaviour model · UC4, UC5, UC6")
 
-    architectures = da.behaviour_architectures(species)
+    pipeline = _pipeline_selector(species)
+    architectures = da.behaviour_architectures(species, pipeline)
     if not architectures:
-        _no_model_guidance(species)
+        _no_model_guidance(species, pipeline)
         return
 
     architecture = _architecture_selector(architectures)
-    service = _service(species, architecture)
+    service = _service(species, architecture, pipeline)
     if service is None:
         st.error(f"The checkpoint for {da.pretty(species)} ({architecture}) "
                  f"could not be loaded. Retrain it to continue.")
         return
 
-    metrics = da.load_behaviour_metrics(species, architecture)
-    predictions = _predictions(species, architecture)
+    metrics = da.load_behaviour_metrics(species, architecture, pipeline)
+    predictions = _predictions(species, architecture, pipeline)
     if predictions.empty:
         st.warning("The model loaded but produced no predictions — there are "
                    "no detections for this species to classify.")
@@ -76,14 +100,16 @@ def render(species: str) -> None:
     _model_in_use(service, species)
     _metric_row(predictions, metrics, service)
     rule()
-    _data_sufficiency(species)
+    _data_sufficiency(species, pipeline)
     rule()
     _class_distributions(predictions)
     rule()
     _held_out_performance(metrics)
     rule()
-    _generalisation(architecture)
+    _generalisation(architecture, pipeline)
     rule()
+    if _pipeline_comparison():
+        rule()
     _camera_table(predictions)
     rule()
     _seasonal_profile(species, predictions)
@@ -97,10 +123,10 @@ def render(species: str) -> None:
     _provenance(service, metrics)
 
 
-def _data_sufficiency(species: str) -> None:
+def _data_sufficiency(species: str, pipeline: str) -> None:
     """What this deployment's data can honestly support."""
     st.subheader("What This Data Supports")
-    report = da.sufficiency(species)
+    report = da.sufficiency(species, pipeline)
     sufficiency_panel(report)
     if not report.supports("movement"):
         note("Movement classifications are shown below because the model "
@@ -108,24 +134,24 @@ def _data_sufficiency(species: str) -> None:
              "the activity results instead.", ok=False)
 
 
-def _no_model_guidance(species: str) -> None:
+def _no_model_guidance(species: str, pipeline: str) -> None:
     """Shown when no behaviour model has been trained for this species yet."""
     st.info(f"No behavioural model has been trained for "
             f"**{da.pretty(species)}** yet.")
-    detections = da.behaviour_detections(species)
+    detections = da.behaviour_detections(species, pipeline)
     if detections.empty:
         st.markdown(
             "There are also no Pipeline 1 detections for this species. "
             "Run the detection pipeline first:")
-        st.code(f"python scripts/run_pipeline.py --pipeline bioclip_megadetector "
+        st.code(f"python scripts/run_pipeline.py --pipeline {pipeline} "
                 f"--species {species} --top_n 1500", language="bash")
         return
 
     cameras = detections["camera_id"].nunique()
     st.markdown(f"There are **{len(detections):,} detections** across "
                 f"**{cameras} cameras** ready to train on:")
-    st.code(f"python scripts/train_behaviour.py --species {species} --model lstm",
-            language="bash")
+    st.code(f"python scripts/train_behaviour.py --species {species} "
+            f"--model lstm --pipeline {pipeline}", language="bash")
     trained = da.behaviour_checkpoints()
     if trained:
         st.caption("Trained models available for: "
@@ -288,7 +314,7 @@ def _seasonal_profile(species: str, predictions: pd.DataFrame) -> None:
     camera = st.selectbox(
         "Camera", predictions.sort_values("detection_count", ascending=False)
         ["camera_id"].tolist())
-    detections = da.behaviour_detections(species)
+    detections = da.behaviour_detections(species, _pipeline())
     profile = da.monthly_profile(detections, camera)
     if profile.empty:
         st.info("No monthly profile available for this camera.")
@@ -325,7 +351,7 @@ def _query_section(species: str) -> None:
                "behaviour classes, species, habitats, months and camera "
                "codes, and shows you exactly what it understood.")
 
-    patterns = da.stored_patterns(species)
+    patterns = da.stored_patterns(species, pipeline=_pipeline())
     if patterns.empty:
         st.info("No stored patterns to query yet. Patterns are saved when a "
                 "model is trained.")
@@ -377,7 +403,7 @@ def _validation_section(species: str) -> None:
                "this species and site. Verdicts are appended, never "
                "overwritten, and never alter the model's own confidence.")
 
-    patterns = da.stored_patterns(species)
+    patterns = da.stored_patterns(species, pipeline=_pipeline())
     if patterns.empty:
         st.info("No stored patterns to review yet.")
         return
@@ -527,13 +553,27 @@ def _model_in_use(service, species: str) -> None:
          f"were measured on species it had also never seen.", ok=False)
 
 
-def _generalisation(architecture: str) -> None:
+def _pipeline_comparison() -> bool:
+    """Held-out scores for every Pipeline 1 source and architecture."""
+    table = da.behaviour_comparison()
+    if len(table) < 2:
+        return False
+    st.subheader("Comparison Across Pipeline 1 Sources")
+    st.caption("Each row is a leave-one-species-out run on one pipeline's "
+               "detections. The pipelines do not yield identical cameras, "
+               "so the test sets differ; treat gaps of a few points as "
+               "noise rather than a ranking.")
+    st.dataframe(table, width="stretch", hide_index=True)
+    return True
+
+
+def _generalisation(architecture: str, pipeline: str) -> None:
     """How well the pooled model transfers to species it never trained on.
 
     This is the evidence behind any prediction made for an untrained species,
     so it belongs on the page rather than only in a metrics file.
     """
-    report = da.load_cross_species_metrics(architecture)
+    report = da.load_cross_species_metrics(architecture, pipeline)
     folds = report.get("folds") or []
     if not folds:
         return

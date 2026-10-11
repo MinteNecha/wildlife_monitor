@@ -35,17 +35,22 @@ def render(species: str) -> None:
 
 def _behaviour_frame(species: str):
     """Behaviour predictions for whichever architecture is trained."""
-    architectures = da.behaviour_architectures(species)
+    pipelines = da.behaviour_pipelines(species)
+    pipeline = st.session_state.get("behaviour_pipeline")
+    if pipeline not in pipelines:
+        pipeline = pipelines[0] if pipelines else da.BEHAVIOUR_PIPELINE
+    architectures = da.behaviour_architectures(species, pipeline)
     if not architectures:
         import pandas as pd
         return pd.DataFrame()
     preferred = str(st.session_state.get("arch", "lstm")).lower()
     architecture = preferred if preferred in architectures else architectures[0]
-    service = da.load_behaviour_service(species, architecture)
+    service = da.load_behaviour_service(species, architecture, pipeline)
     if service is None:
         import pandas as pd
         return pd.DataFrame()
-    return service.predict_frame(da.behaviour_detections(species), species)
+    return service.predict_frame(
+        da.behaviour_detections(species, pipeline), species)
 
 
 def _payload(frame, export_format: str, title: str, summary, columns):

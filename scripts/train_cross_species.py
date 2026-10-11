@@ -53,7 +53,7 @@ import numpy as np
 
 from wildlife_monitor.config import TARGET_SPECIES
 from wildlife_monitor.pipeline2.datasets import (
-    DEFAULT_EPOCHS, DEFAULT_PIPELINE, METRICS_DIR, gather_species,
+    DEFAULT_EPOCHS, DEFAULT_PIPELINE, gather_species, metrics_dir,
 )
 from wildlife_monitor.pipeline2.inference import (
     CROSS_SPECIES_KEY, checkpoint_path,
@@ -202,6 +202,36 @@ def summarise(folds: list[dict]) -> None:
           "not\nwhether real animal behaviour does.")
 
 
+def deploy(examples, report: dict, args, epochs: int) -> None:
+    """Train one model on every species and save it as the deployed model."""
+    print(f"\n[INFO] Training the deployed model on all "
+          f"{len(species_in(examples))} species")
+    np.random.seed(args.seed)
+    model = fit(examples, args.model, args.max_length, epochs,
+                args.learning_rate, args.batch_size)
+    metadata = {
+        "species": CROSS_SPECIES_KEY,
+        "trained_species": species_in(examples),
+        "architecture": args.model,
+        "cross_species": True,
+        "train_cameras": len(examples),
+        "trained_at": datetime.now().isoformat(timespec="seconds"),
+        "generalisation": report,
+        "pipeline": args.pipeline,
+        "max_length": args.max_length,
+        "epochs": epochs,
+        "learning_rate": args.learning_rate,
+        "seed": args.seed,
+        "batch_size": args.batch_size,
+    }
+    saved = model.save_checkpoint(
+        checkpoint_path(CROSS_SPECIES_KEY, args.model, args.pipeline),
+        metadata)
+    print(f"[INFO] Checkpoint -> {saved}")
+    print("[INFO] The dashboard will now use this model for any species "
+          "without its own trained model.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -227,6 +257,11 @@ def main() -> None:
     parser.add_argument("--no-deploy", action="store_true",
                         help="report generalisation only; do not train or save "
                              "the final all-species model")
+    parser.add_argument("--deploy-only", action="store_true",
+                        help="train and save the all-species model without "
+                             "repeating the leave-one-species-out evaluation. "
+                             "Needs a stored evaluation for this pipeline and "
+                             "model, and leaves it unchanged")
     args = parser.parse_args()
 
     requested = (TARGET_SPECIES if args.all
@@ -253,6 +288,16 @@ def main() -> None:
             example["movement_label"], 0) + 1
     print("[INFO] movement labels: " + ", ".join(
         f"{name} {counts.get(name, 0)}" for name in MOVEMENT_CLASSES))
+
+    if args.deploy_only:
+        stored = (metrics_dir(args.pipeline)
+                  / f"cross_species_{args.model}_metrics.json")
+        if not stored.exists():
+            print(f"\n[ERROR] No stored evaluation at {stored}. Run once "
+                  f"without --deploy-only first.")
+            raise SystemExit(1)
+        deploy(examples, json.loads(stored.read_text()), args, epochs)
+        return
 
     steps = max(1, -(-len(examples) // args.batch_size))
     print(f"\n[INFO] Leave-one-species-out ({args.model}, {epochs} epochs, "
@@ -302,31 +347,11 @@ def main() -> None:
     }
 
     if not args.no_deploy:
-        print(f"\n[INFO] Training the deployed model on all "
-              f"{len(species_in(examples))} species")
-        np.random.seed(args.seed)
-        model = fit(examples, args.model, args.max_length, epochs,
-                    args.learning_rate, args.batch_size)
-        metadata = {
-            "species": CROSS_SPECIES_KEY,
-            "trained_species": species_in(examples),
-            "architecture": args.model,
-            "cross_species": True,
-            "train_cameras": len(examples),
-            "trained_at": datetime.now().isoformat(timespec="seconds"),
-            "generalisation": report,
-            **{key: report[key] for key in
-               ("pipeline", "max_length", "epochs", "learning_rate", "seed",
-                "batch_size")},
-        }
-        saved = model.save_checkpoint(
-            checkpoint_path(CROSS_SPECIES_KEY, args.model), metadata)
-        print(f"[INFO] Checkpoint -> {saved}")
-        print("[INFO] The dashboard will now use this model for any species "
-              "without its own trained model.")
+        deploy(examples, report, args, epochs)
 
-    METRICS_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = METRICS_DIR / f"cross_species_{args.model}_metrics.json"
+    report_path = (metrics_dir(args.pipeline)
+                   / f"cross_species_{args.model}_metrics.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2))
     print(f"[INFO] Metrics    -> {report_path}")
 

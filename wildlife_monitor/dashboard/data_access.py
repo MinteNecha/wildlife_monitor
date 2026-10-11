@@ -202,10 +202,10 @@ def accuracy_of(frame: pd.DataFrame) -> float | None:
     return float(verified["verification"].eq("correct").mean() * 100)
 
 
-def sufficiency(species: str) -> "object":
+def sufficiency(species: str, pipeline: str = "") -> "object":
     """Assess what the detections for a species can honestly support."""
     from wildlife_monitor.data.sufficiency import assess
-    return assess(behaviour_detections(species))
+    return assess(behaviour_detections(species, pipeline))
 
 
 def load_all_detections(species: str) -> dict[str, pd.DataFrame]:
@@ -301,13 +301,31 @@ BEHAVIOUR_RESULTS_DIR = RESULTS_DIR / "behaviour"
 BEHAVIOUR_PIPELINE = "bioclip_megadetector"
 
 
-def behaviour_checkpoints() -> list[dict[str, str]]:
-    """Every trained behaviour model on disk, newest information first."""
+def pipeline_label(pipeline: str) -> str:
+    """Display name for a Pipeline 1 source."""
+    return PIPELINE_DISPLAY.get(pipeline, {}).get("label", pipeline)
+
+
+def behaviour_checkpoints(pipeline: str = "") -> list[dict[str, str]]:
+    """Every trained behaviour model on disk, optionally for one pipeline."""
     from wildlife_monitor.pipeline2.inference import available_checkpoints
-    return available_checkpoints()
+    return available_checkpoints(pipeline)
 
 
-def behaviour_architectures(species: str) -> list[str]:
+def behaviour_pipelines(species: str = "") -> list[str]:
+    """Pipeline 1 sources with a trained model, the default source first.
+
+    With a species, only the sources whose models can serve that species.
+    """
+    names = {entry["pipeline"] for entry in behaviour_checkpoints()}
+    if species:
+        names = {name for name in names
+                 if behaviour_architectures(species, name)}
+    return sorted(names, key=lambda name: (name != BEHAVIOUR_PIPELINE, name))
+
+
+def behaviour_architectures(species: str,
+                            pipeline: str = BEHAVIOUR_PIPELINE) -> list[str]:
     """Architectures usable for this species, including the pooled model.
 
     A species with no model of its own can still be classified by the
@@ -316,7 +334,7 @@ def behaviour_architectures(species: str) -> list[str]:
     to serve.
     """
     from wildlife_monitor.pipeline2.inference import CROSS_SPECIES_KEY
-    entries = behaviour_checkpoints()
+    entries = behaviour_checkpoints(pipeline)
     own = {entry["architecture"] for entry in entries
            if entry["species"] == species}
     pooled = {entry["architecture"] for entry in entries
@@ -324,24 +342,27 @@ def behaviour_architectures(species: str) -> list[str]:
     return sorted(own | pooled)
 
 
-def has_own_behaviour_model(species: str, architecture: str = "") -> bool:
+def has_own_behaviour_model(species: str, architecture: str = "",
+                            pipeline: str = BEHAVIOUR_PIPELINE) -> bool:
     """Whether this species has a model trained on it specifically."""
     return any(entry["species"] == species
                and (not architecture
                     or entry["architecture"] == architecture)
-               for entry in behaviour_checkpoints())
+               for entry in behaviour_checkpoints(pipeline))
 
 
-def load_behaviour_metrics(species: str, architecture: str) -> dict:
+def load_behaviour_metrics(species: str, architecture: str,
+                           pipeline: str = BEHAVIOUR_PIPELINE) -> dict:
     """Training metadata and held-out metrics for the model in use.
 
     Falls back to the cross-species metrics when this species has no model of
     its own, so the provenance panel describes the model that actually
     produced the predictions on screen.
     """
-    path = BEHAVIOUR_RESULTS_DIR / f"{species}_{architecture}_metrics.json"
+    folder = BEHAVIOUR_RESULTS_DIR / pipeline
+    path = folder / f"{species}_{architecture}_metrics.json"
     if not path.exists():
-        pooled = BEHAVIOUR_RESULTS_DIR / f"cross_species_{architecture}_metrics.json"
+        pooled = folder / f"cross_species_{architecture}_metrics.json"
         path = pooled if pooled.exists() else path
     if not path.exists():
         return {}
@@ -351,7 +372,8 @@ def load_behaviour_metrics(species: str, architecture: str) -> dict:
         return {}
 
 
-def load_behaviour_service(species: str, architecture: str):
+def load_behaviour_service(species: str, architecture: str,
+                           pipeline: str = BEHAVIOUR_PIPELINE):
     """Best available model for a species, or None when there is none.
 
     Prefers a model trained on this species and falls back to the
@@ -360,14 +382,16 @@ def load_behaviour_service(species: str, architecture: str):
     """
     from wildlife_monitor.pipeline2.inference import BehaviourService
     try:
-        return BehaviourService.load_for(species, architecture)
+        return BehaviourService.load_for(species, architecture, pipeline)
     except (FileNotFoundError, OSError, ValueError, KeyError):
         return None
 
 
-def load_cross_species_metrics(architecture: str) -> dict:
+def load_cross_species_metrics(architecture: str,
+                               pipeline: str = BEHAVIOUR_PIPELINE) -> dict:
     """Leave-one-species-out generalisation results, when they exist."""
-    path = BEHAVIOUR_RESULTS_DIR / f"cross_species_{architecture}_metrics.json"
+    path = (BEHAVIOUR_RESULTS_DIR / pipeline
+            / f"cross_species_{architecture}_metrics.json")
     if not path.exists():
         return {}
     try:
@@ -376,12 +400,55 @@ def load_cross_species_metrics(architecture: str) -> dict:
         return {}
 
 
-def behaviour_detections(species: str) -> pd.DataFrame:
+def behaviour_comparison() -> pd.DataFrame:
+    """Leave-one-species-out scores for every pipeline and architecture."""
+    rows = []
+    for path in sorted(BEHAVIOUR_RESULTS_DIR.glob("*/cross_species_*_metrics.json")):
+        try:
+            report = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not report.get("folds"):
+            continue
+        movement = float(report.get("mean_movement_accuracy", 0.0))
+        majority = float(report.get("mean_majority_baseline", 0.0))
+        rows.append({
+            "Pipeline 1 source": pipeline_label(path.parent.name),
+            "Architecture": str(report.get("architecture", "")).title(),
+            "Cameras": report.get("total_cameras", 0),
+            "Epochs": report.get("epochs", 0),
+            "Activity %": float(report.get("mean_activity_accuracy", 0.0)),
+            "Movement %": movement,
+            "Majority %": majority,
+            "Gain over majority": round(movement - majority, 1),
+        })
+    return pd.DataFrame(rows)
+
+
+def behaviour_detections(species: str, pipeline: str = "") -> pd.DataFrame:
     """The detections frame Pipeline 2 is trained and served on."""
-    return load_raw_detections(BEHAVIOUR_PIPELINE, species)
+    return load_raw_detections(pipeline or BEHAVIOUR_PIPELINE, species)
 
 
-def stored_patterns(species: str, model_version: str | None = None) -> pd.DataFrame:
+def _for_pipeline(patterns: pd.DataFrame, pipeline: str) -> pd.DataFrame:
+    """Keep the patterns written by models built on one pipeline.
+
+    The pipeline is part of a model's version string. Versions written
+    before that was recorded name no pipeline and belong to the default.
+    """
+    if not pipeline or patterns.empty:
+        return patterns
+    versions = patterns["model_version"].astype(str)
+    names = set(PIPELINE_DISPLAY) | {pipeline}
+    named = versions.apply(
+        lambda text: any(f" · {name} · " in text for name in names))
+    mine = versions.str.contains(f" · {pipeline} · ", regex=False)
+    legacy = ~named & (pipeline == BEHAVIOUR_PIPELINE)
+    return patterns[mine | legacy]
+
+
+def stored_patterns(species: str, model_version: str | None = None,
+                    pipeline: str = "") -> pd.DataFrame:
     """Behaviour patterns persisted by the last training run."""
     if not database_exists():
         return pd.DataFrame()
@@ -389,8 +456,9 @@ def stored_patterns(species: str, model_version: str | None = None) -> pd.DataFr
         from wildlife_monitor.db import session
         from wildlife_monitor.db.repository import BehaviourPatternRepository
         with session() as connection:
-            return BehaviourPatternRepository(connection).frame(
+            frame = BehaviourPatternRepository(connection).frame(
                 species, model_version)
+        return _for_pipeline(frame, pipeline)
     except Exception:
         return pd.DataFrame()
 

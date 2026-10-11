@@ -254,11 +254,10 @@ def test_service_predicts_one_pattern_per_camera(tmp_path, detections, monkeypat
     model = LSTMBehaviourModel(hidden_size=8, num_layers=1)
     train_model(model, sequences, lengths, activity, movement, months,
                 num_epochs=5, verbose=False)
-    model.save_checkpoint(tmp_path / "zebra_lstm.npz",
+    monkeypatch.setattr(inference, "BEHAVIOUR_DIR", tmp_path)
+    model.save_checkpoint(inference.checkpoint_path("zebra", "lstm"),
                            {"species": "zebra", "architecture": "lstm",
                             "max_length": 10})
-
-    monkeypatch.setattr(inference, "BEHAVIOUR_DIR", tmp_path)
     service = BehaviourService.load("zebra", "lstm")
     patterns = service.predict(detections, "zebra")
 

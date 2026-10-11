@@ -383,3 +383,42 @@ def test_evaluation_chunking_gives_the_same_answer_as_one_pass():
 
     assert np.allclose(whole[0], pieces[0])
     assert np.allclose(whole[1], pieces[1])
+
+
+# -- one model per Pipeline 1 source ------------------------------------------
+
+def test_pipelines_keep_separate_checkpoints(tmp_path, monkeypatch, pooled):
+    monkeypatch.setattr(inf, "BEHAVIOUR_DIR", tmp_path)
+    sources = ("bioclip_megadetector", "bioclip_yolo")
+    for source in sources:
+        fit(pooled, epochs=2).save_checkpoint(
+            inf.checkpoint_path("zebra", "lstm", source),
+            {"species": "zebra", "architecture": "lstm", "pipeline": source,
+             "max_length": 40, "trained_at": "2026-10-11T22:00:00"})
+
+    first, second = (inf.checkpoint_path("zebra", "lstm", s) for s in sources)
+    assert first != second and first.exists() and second.exists()
+    assert {e["pipeline"] for e in inf.available_checkpoints()} == set(sources)
+    only_yolo = inf.available_checkpoints("bioclip_yolo")
+    assert [e["pipeline"] for e in only_yolo] == ["bioclip_yolo"]
+    service = inf.BehaviourService.load("zebra", "lstm", "bioclip_yolo")
+    assert "bioclip_yolo" in service.model_version
+    assert inf.species_with_models("lstm", "bioclip_yolo") == ["zebra"]
+
+
+def test_comparison_table_reads_every_pipeline(tmp_path, monkeypatch):
+    import json
+    from wildlife_monitor.dashboard import data_access as da
+    monkeypatch.setattr(da, "BEHAVIOUR_RESULTS_DIR", tmp_path)
+    for source, movement in (("bioclip_yolo", 84.0), ("bioclip_megadetector", 83.0)):
+        folder = tmp_path / source
+        folder.mkdir()
+        (folder / "cross_species_lstm_metrics.json").write_text(json.dumps({
+            "architecture": "lstm", "total_cameras": 100, "epochs": 5,
+            "folds": [{"held_out_species": "zebra"}],
+            "mean_activity_accuracy": 90.0, "mean_movement_accuracy": movement,
+            "mean_majority_baseline": 50.0}))
+    table = da.behaviour_comparison()
+    assert len(table) == 2
+    assert set(table["Gain over majority"]) == {34.0, 33.0}
+    assert da.load_cross_species_metrics("lstm", "bioclip_yolo")["mean_movement_accuracy"] == 84.0

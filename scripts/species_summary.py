@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 
@@ -45,7 +46,7 @@ from wildlife_monitor.pipeline2.aggregate import (
     MIN_DETECTIONS, counts_frame, profile_species, to_frame,
 )
 from wildlife_monitor.pipeline2.datasets import (
-    DEFAULT_PIPELINE, METRICS_DIR, load_species_detections,
+    DEFAULT_PIPELINE, load_species_detections, metrics_dir,
 )
 from wildlife_monitor.pipeline2.inference import BehaviourService
 
@@ -59,7 +60,7 @@ def profile_one(species: str, architecture: str, pipeline: str,
         return None, "no detections"
 
     try:
-        service = BehaviourService.load_for(species, architecture)
+        service = BehaviourService.load_for(species, architecture, pipeline)
     except (FileNotFoundError, OSError):
         return None, "no trained model"
 
@@ -200,8 +201,9 @@ def main() -> None:
     if args.full:
         print_detail(profiles)
 
-    destination = args.out or (METRICS_DIR / f"species_summary_{args.model}.csv")
-    METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    destination = args.out or (
+        metrics_dir(args.pipeline) / f"species_summary_{args.model}.csv")
+    Path(destination).parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(destination, index=False)
     print(f"\n[INFO] Summary  -> {destination}")
 
